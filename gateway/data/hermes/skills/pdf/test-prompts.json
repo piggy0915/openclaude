@@ -1,0 +1,1 @@
+[{"id": 1, "prompt": "Merge these 3 PDF files into a single document", "expected": "Uses pypdf to merge PDFs with PdfWriter, outputs merged.pdf"}, {"id": 2, "prompt": "Extract all tables from a scanned Chinese PDF using OCR and export to Excel", "expected": "Uses OCR tools/methods referenced in skill, handles Chinese text, exports structured data"}]

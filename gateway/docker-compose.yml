@@ -1,0 +1,380 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+#  valkey:
+#    image: valkey/valkey:8-alpine
+#    container_name: searxng-valkey
+#    restart: unless-stopped
+#    command: valkey-server --appendonly yes
+#    volumes:
+#      - ./data/valkey:/data
+#    networks:
+#      - rag-network
+#    deploy:
+#      resources:
+#        limits:
+#          cpus: '1.0'      # Qdrant 计算密集，给足资源
+#          memory: 2G
+#        reservations:
+#          cpus: '1.0'
+#          memory: 1G
+
+
+  # ============================================================
+  # SearXNG - 自建元搜索引擎（免费无限次搜索）
+  # ============================================================
+  searxng:
+    image: searxng/searxng:2026.5.23-323ce7600
+    container_name: searxng
+    restart: unless-stopped
+#    depends_on:
+#      - valkey
+    ports:
+      - "4000:4000"        # Web 管理界面（可选，调试用）
+    volumes:
+      - ./data/searxng:/etc/searxng:rw          # 配置文件
+    environment:
+      - SEARXNG_PORT=4000           # 强制设置容器内端口
+      - SEARXNG_BIND_ADDRESS=0.0.0.0
+      - GRANIAN_PORT=4000
+      - SEARXNG_BASE_URL=https://localhost:4000  # 容器内无所谓
+      - SEARXNG_SECRET_KEY=${SEARXNG_SECRET_KEY:-745101bbbdfb1cdfaf484012dbde842856b3daab4ab3e985a55e47851087cfac}
+      - TZ=Asia/Shanghai
+      - SEARXNG_DISABLED_ENGINES=wikidata,ahmia,torch
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+    networks:
+      - rag-network
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/search?q=test&format=json').getcode() == 200"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'      # Qdrant 计算密集，给足资源
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+
+  # ============================================================
+  # Qdrant - 高性能向量数据库（替代 ChromaDB）
+  # ============================================================
+  qdrant:
+    image: qdrant/qdrant:v1.18
+    container_name: qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"      # HTTP API + Dashboard
+      - "6334:6334"      # gRPC API（高性能，可选）
+    volumes:
+      - ./data/qdrant/storage:/qdrant/storage   # 持久化存储
+    environment:
+      - TZ=Asia/Shanghai
+      # 可选：设置 API 密钥（生产环境强烈建议）
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY:-}
+      # 可选：配置日志级别
+      - QDRANT__LOG_LEVEL=INFO
+      # 优化内存使用
+      - QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS=4
+      - QDRANT__STORAGE__PERFORMANCE__MAX_OPTIMIZATION_THREADS=2
+
+      # 优化 HNSW 索引（平衡精度和速度）
+      - QDRANT__COLLECTION__HNSW_EF_CONSTRUCT=100  # 默认 100，可降至 50 提速
+      - QDRANT__COLLECTION__HNSW_EF=64  # 搜索时的动态列表大小
+
+      # 优化写入性能
+      - QDRANT__STORAGE__PERFORMANCE__WRITE_BUFFER_SIZE_MB=100
+      # 可选：启用集群模式（单机可注释）
+      # - QDRANT__CLUSTER__ENABLED=false
+    networks:
+      - rag-network
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'      # Qdrant 计算密集，给足资源
+          memory: 8G
+        reservations:
+          cpus: '1.0'
+          memory: 4G
+
+  # ============================================================
+  # Hermes - AI Agent
+  # ============================================================
+  hermes:
+    image: hermes-agent:v2026.5.16
+#    image: nousresearch/hermes-agent:v2026.5.16
+    container_name: hermes
+    restart: unless-stopped
+    ports:
+      - "8003:8000"     # API Server 端口
+      - "8005:8005"     # Dashboard 端口
+    # ========== 关键修复：使用宿主机用户 ID 运行容器 ==========
+#    user: "${UID:-1000}:${GID:-1000}"
+    env_file:
+      - ./config/.env
+    volumes:
+      - hermes_node_modules_volume:/usr/local/lib/node_modules
+      - ./app:/app
+      - ./data/hermes:/home/agent
+      - ./data/hermes/plugins:/opt/hermes/plugins
+      - ./config/.env:/home/agent/.env
+      - ./config/hermes.yaml:/home/agent/config.yaml
+      - ./workspace:/workspace
+
+      # ========== 插件持久化相关挂载（全部集中在 ./data/hermes 下） ==========
+      #- ./data/hermes/venv:/opt/hermes/.venv
+#      - ./data/hermes/home:/root
+      - ./data/hermes/plugins:/opt/plugins
+      - ./scripts:/home/agent/scripts
+      #- ./data/hermes/scripts/enter-hermes.sh:/home/agent/scripts/enter-hermes.sh:ro
+      # ========== 新增：SSH 私钥挂载 ==========
+      - ~/.ssh/id_rsa_hermes:/root/.ssh/id_rsa_hermes:ro
+    environment:
+      - TZ=Asia/Shanghai          # 设置时区
+      - HERMES_HOME=/home/agent  # 关键：修改 HOME 目录
+      #- HERMES_DASHBOARD_INSECURE=true
+      #- HERMES_BIND=0.0.0.0
+      - XDG_CONFIG_HOME=/home/agent
+      - XDG_DATA_HOME=/home/agent
+      - XDG_CACHE_HOME=/home/agent
+      # 安全标志
+      #- HERMES_ALLOW_INSECURE=true
+      - WEIXIN_DM_POLICY=open
+      - WEIXIN_GROUP_POLICY=disabled
+
+      # --- 核心：完全替代 .env 文件的功能 ---
+      # 1. 确保 Hermes 能找到自己的配置文件
+      #- HERMES_HOME=/root/.hermes
+      - GATEWAY_ALLOW_ALL_USERS=true
+
+      # 2. (可选但推荐) 为了防止冲突，可以清除任何可能从宿主机继承的代理设置
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - NO_PROXY=localhost,127.0.0.1,chromadb,embedding-llama,reranker-llama,host.docker.internal
+
+      # 3. 为了避免任何可能混淆的内部环境变量，不再单独设置 OPENAI_* 系列变量
+      #    因为所有配置都已在 hermes.yaml 中明确定义。
+      # 关键：明确启用 API 服务器
+      - API_SERVER_ENABLED=true
+      - API_SERVER_PORT=8000
+      - API_SERVER_HOST=0.0.0.0
+      - API_SERVER_KEY=sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V
+
+      # 禁用可能冲突的功能
+      - HERMES_LOG_LEVEL=debug
+      - DISABLE_MESSAGING_PLATFORMS=true
+
+      # ========== 插件相关环境变量 ==========
+      # 启用插件系统
+      - HERMES_PLUGINS_ENABLED=true
+      - HERMES_PLUGINS_DIR=/opt/plugins
+      - CLAUDE_PLUGINS_DIR=/root/.claude/plugins
+      - PATH=/opt/hermes/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - PYTHONPATH=/opt/hermes/.venv/lib/python3.11/site-packages
+      - AUTOLOAD_PLUGINS=true
+
+      - PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
+
+      # SearXNG 搜索后端（免费无限次）
+      - SEARXNG_URL=http://searxng:4000/search?format=json
+
+      - VECTOR_DB_PROVIDER=qdrant
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      # 如果设置了 API 密钥
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+
+      # 可选：配置 collection 名称
+      - QDRANT_COLLECTION=hermes_knowledge
+      - QDRANT_VECTOR_SIZE=1024  # 根据你的 embedding 维度调整
+
+      # ========== 新增：SSH Backend 配置 ==========
+      - TERMINAL_ENV=ssh                                    # 启用 SSH 执行后端
+      - TERMINAL_SSH_HOST=172.17.0.1              # 宿主机地址
+      - TERMINAL_SSH_USER=root                              # 替换为你的 Debian 用户名
+      - TERMINAL_SSH_PORT=22
+      - TERMINAL_SSH_KEY_PATH=/root/.ssh/id_rsa_hermes      # 容器内的私钥路径
+      - TERMINAL_SSH_CONTROL_PERSIST=300                    # 连接保持时间（秒）
+      - TERMINAL_TIMEOUT=180                                 # 命令执行超时
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - searxng
+      - qdrant
+      - embedding-llama
+      - reranker-llama
+
+    # 🆕 添加入口脚本
+    entrypoint: ["/home/agent/scripts/entrypoint.sh"]
+    command: >
+      bash -c "
+        echo '=== Installing plugins ===' &&
+        if [ -f /home/agent/init-plugins.sh ]; then
+          chmod +x /home/agent/init-plugins.sh &&
+          /home/agent/init-plugins.sh
+        fi &&
+        echo '=== Starting Hermes Gateway ===' &&
+        exec /opt/hermes/docker/entrypoint.sh gateway run
+      "
+    networks:
+      - rag-network
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 8G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "3"
+
+  hermes-webui:
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.0}
+    container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
+    ports:
+      - "${PORT:-6060}:${PORT:-6060}"
+      - "${XAI_OAUTH_PORT:-56121}:56121"
+    volumes:
+      - ${HERMES_DATA_DIR:-./data/hermes}:/home/agent
+      - ${HERMES_DATA_DIR:-./data/hermes}/hermes-web-ui:/home/agent/.hermes-web-ui
+
+      # 共享插件目录（只读）
+      - ./data/hermes/plugins:/home/agent/.claude/plugins:ro
+    environment:
+      - AGENT_ENDPOINT=http://hermes:8000  # WebUI连接Agent的地址
+      - PORT=${PORT:-6060}
+      - HERMES_HOME=/home/agent
+      - HERMES_BIN=/opt/hermes/.venv/bin/hermes
+      - PATH=/opt/hermes/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - AUTH_DISABLED=${AUTH_DISABLED:-false}
+      - HERMES_ALLOW_ROOT_GATEWAY=1
+#      # 🔧 强制使用 API 模式，禁用 Bridge
+#      - DEFAULT_AGENT_MODE=api
+#      - USE_AGENT_BRIDGE=false
+#      - AGENT_BRIDGE_ENABLED=false
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    networks:
+      - rag-network
+    depends_on:
+      - hermes
+    deploy:
+      resources:
+        limits:
+          memory: 1G            # 面板内存限制 512MB
+          cpus: '1.0'
+
+
+  # ============================================================
+  # Embedding 服务（使用 llama.cpp 容器 + 宿主机模型）
+  # ============================================================
+  embedding-llama:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    container_name: embedding-llama
+    restart: unless-stopped
+    command: >
+      -m /models/bge/bge-large-zh-v1.5-gguf/bge-large-zh-v1.5-q8_0.gguf
+      --host 0.0.0.0
+      --port 8000
+      --embedding
+      --pooling mean
+      -ngl 0
+      -t 4
+#      --log-format json
+    volumes:
+      - /mnt/hgfs/models:/models              # 宿主机模型目录挂载到容器内 /models
+    ports:
+      - "8001:8000"
+    networks:
+      - rag-network
+    healthcheck:
+      disable: true
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat" ]
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'      # Ultra9 多核优势，给足6核提速
+          memory: 6G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+
+
+  # ============================================================
+  # Rerank 服务（使用 llama.cpp 容器 + 宿主机模型）
+  # ============================================================
+  reranker-llama:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    container_name: reranker-llama
+    restart: unless-stopped
+    command: >
+      --reranking
+      --pooling rank
+      -m /models/bge/bge-reranker-v2-m3-GGUF/bge-reranker-v2-m3-Q8_0.gguf
+      --host 0.0.0.0
+      --port 8000
+      -ngl 0
+      -t 3
+#      --log-format json
+    volumes:
+      - /mnt/hgfs/models:/models
+    ports:
+      - "8002:8000"
+    networks:
+      - rag-network
+    healthcheck:
+      disable: true
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'         # Rerank 计算量略小于 embedding
+          memory: 4G
+        reservations:
+          cpus: '1.0'      # Rerank 计算量略小于 embedding
+          memory: 1G
+
+volumes:
+  hermes_node_modules_volume:
+    # 可选配置
+    name: hermes_data  # 指定卷名称（不指定则自动生成）
+    # driver: local  # 默认就是 local
+    # driver_opts:   # 高级选项
+    #   type: none
+    #   device: /path
+    #   o: bind
+
+# ============================================================
+# 网络配置
+# ============================================================
+networks:
+  rag-network:
+    driver: bridge
+    name: rag-network  # 明确指定网络名为 rag-network

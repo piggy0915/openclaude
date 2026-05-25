@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "openclaude": {
+      "command": "docker",
+      "args": [
+        "exec",
+        "-i",
+        "openclaude-mcp",
+        "node",
+        "server.js"
+      ]
+    }
+  }
+}

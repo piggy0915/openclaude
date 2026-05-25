@@ -1,0 +1,48 @@
+{
+  "gateway": {
+    "port": 18789,
+    "bind": "lan",
+    "mode": "local",
+    "tls": {
+      "enabled": true,
+      "certFile": "/app/certs/cert.pem",
+      "keyFile": "/app/certs/key.pem"
+    },
+    "auth": {
+      "mode": "token",
+      "token": "sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V"
+    },
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        },
+        "responses": {
+          "enabled": true
+        }
+      }
+    },
+    "controlUi": {
+      "allowedOrigins": ["*"]
+    }
+  },
+  "models": {
+    "providers": {
+      "hermes": {
+        "baseUrl": "http://192.168.120.30:8003/v1",
+        "apiKey": "sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V",
+        "models": [
+          {
+            "id": "hermes-agent",
+            "name": "hermes-agent"
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "hermes-agent"
+    }
+  }
+}

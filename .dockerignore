@@ -15,3 +15,5 @@ docs
 !README.md
 .github
 .tsbuildinfo
+gateway
+.idea

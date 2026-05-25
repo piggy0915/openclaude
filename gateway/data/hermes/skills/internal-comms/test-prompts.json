@@ -1,0 +1,1 @@
+[{"id": 1, "prompt": "Write a 3P update for my engineering team", "expected": "Loads 3p-updates.md example, follows Progress/Plans/Problems format"}, {"id": 2, "prompt": "Draft an incident report for a 2-hour production outage affecting payment processing", "expected": "Uses general-comms.md or identifies communication type, structures incident report properly"}]
