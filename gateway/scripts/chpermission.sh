@@ -3,7 +3,7 @@
 
 set -e
 
-HERMES_DIR="../data/hermes"
+HERMES_DIR="./data/hermes"
 CONTAINER_NAME="hermes"
 
 echo "=== 1. 停止容器 ==="

@@ -152,5 +152,67 @@ tools:
     timeout: 180
 
 web:
-  search_backend: cascading   # ← 启用级联搜索
-  extract_backend: firecrawl   # 如果还想保留 Firecrawl 的网页提取能力
+  search_backend: cascading
+  extract_backend: firecrawl
+  cascading_search:
+    backends:
+      - provider: firecrawl
+      - provider: tavily
+      - provider: searxng
+        base_url: http://searxng:4000
+
+# 知识库配置
+knowledge_base:
+  enabled: true
+  storage_backend: "qdrant"
+  qdrant:
+    host: qdrant
+    port: 6333
+    collection_name: hermes_knowledge
+    vector_size: 1024
+    # 启用混合检索
+    hybrid_search:
+      enabled: true
+      alpha: 0.5  # 语义vs关键词权重 (0=纯关键词, 1=纯语义)
+
+  # 多知识源配置
+  sources:
+    - name: "obsidian_vault"
+      path: /knowledge_base/obsidian
+      enabled: true
+      auto_sync: true
+      file_extensions: [".md"]
+      exclude_patterns: [".obsidian/", ".trash/", "*/Template/*"]
+
+    - name: "documents"
+      path: /workspace/documents
+      enabled: true
+      auto_sync: false
+
+  # 检索配置
+  retrieval:
+    top_k: 5
+    rerank:
+      enabled: true
+      api_url: http://reranker-llama:8000/rerank
+    score_threshold: 0.35  # 相似度阈值
+
+# API Server 配置（Coze 调用）
+api_server:
+  enabled: true
+  host: 0.0.0.0
+  port: 8000
+  api_key: ${API_SERVER_KEY}
+
+  # 允许跨域（Coze 可能在前端调用）
+  cors:
+    allowed_origins: ["*"]
+    allowed_methods: ["GET", "POST", "PUT", "DELETE"]
+    allowed_headers: ["*"]
+
+# 搜索配置（SearXNG 已配置）
+search:
+  enabled: true
+  engine: "searxng"
+  searxng_url: "http://searxng:4000/search?format=json"
+  max_results: 10
