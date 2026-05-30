@@ -1,4 +1,5 @@
 node_modules/
+gateway/
 dist/
 *.tsbuildinfo
 web/dist/
@@ -18,8 +19,6 @@ coverage/
 agent.log
 plan/
 .idea/
-gateway/
 .bundled_manifest
 .curator_state
 .usage.json
-
