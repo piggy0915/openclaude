@@ -1,5 +1,11 @@
 node_modules/
-gateway/
+gateway/backup/
+gateway/cache/
+gateway/embedding/
+gateway/rerank/
+gateway/workspace/
+gateway/data/
+gateway/certs/
 .idea/
 dist/
 *.tsbuildinfo

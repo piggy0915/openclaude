@@ -1,0 +1,36 @@
+{
+  "env": {
+    "TAVILY_API_KEY": "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"
+  },
+  "model": "claude-sonnet-4-6",
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "tavily@tavily-plugins": true
+  },
+  "extraKnownMarketplaces": {
+    "tavily-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "tavily-ai/skills"
+      }
+    }
+  },
+  "trustedDomains": [
+    "gitee.com",
+    "gitee.io"
+  ],
+  "allowUnsafeFetch": true,
+  "permissions": {
+    "deny": ["WebSearch"]
+  },
+  "mcpServers": {
+    "open-websearch": {
+      "command": "npx",
+      "args": ["-y", "open-websearch@latest"],
+      "env": {
+        "MODE": "stdio",
+        "DEFAULT_SEARCH_ENGINE": "bing"
+      }
+    }
+  }  
+}

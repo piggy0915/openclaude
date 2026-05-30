@@ -1,0 +1,183 @@
+# ============================================================
+# Hermes Agent 配置文件
+# 云端：DeepSeek-V4-Flash（日常）+ DeepSeek-V4-Pro（深度）
+# 本地兜底：Windows llama.cpp + Qwen3.6-35B
+# Embedding/Rerank：容器内服务
+# ============================================================
+
+# --- 1. 模型提供商配置（标准 Hermes 格式）---
+model:
+  default: deepseek/deepseek-v4-flash
+  provider: deepseek
+  base_url: https://api.deepseek.com/v1
+  context_length: 1048576
+  temperature: 0.7
+  max_tokens: 8192
+
+# 你可以用 `hermes model` 交互式切换或 `/model` 在 session 中切换
+# 如果需要深度分析：`/model deepseek/deepseek-v4-pro`
+# 如果需要本地兜底：`/model local/qwen3.6-35b`
+
+# --- 2. Agent 配置 ---
+agent:
+  max_iterations: 50
+  max_turns: 30
+  timeout: 120
+  memory:
+    enabled: true
+    provider: qdrant
+    collection: hermes_memory
+    vector_db:
+      host: qdrant
+      port: 6333
+      api_key: dummy
+
+delegation:
+  max_iterations: 20
+
+# --- 3. 工具配置 ---
+tools:
+  terminal:
+    backend: ssh
+    ssh_host: host.docker.internal
+    ssh_user: root
+    ssh_key_path: /root/.ssh/id_rsa_hermes
+    workdir: /root
+    timeout: 180
+
+  web:
+    search_backend: cascading
+    extract_backend: firecrawl
+    cascading_search:
+      backends:
+        - provider: firecrawl
+        - provider: tavily
+        - provider: searxng
+          base_url: http://searxng:4000
+
+# --- 4. 向量化配置 ---
+embeddings:
+  provider: local_embedding
+  model: bge-large-zh
+  base_url: http://embedding-llama:8000/v1
+  embedding_only: true
+  dimension: 1024
+
+# --- 5. Rerank 配置 ---
+rerank:
+  provider: local_rerank
+  model: bge-reranker
+  base_url: http://reranker-llama:8000/v1
+  top_n: 5
+
+# --- 6. 路由规则 ---
+routing:
+  - name: "simple_tasks"
+    priority: 10
+    match:
+      keywords:
+        - 总结
+        - 翻译
+        - 分类
+        - 简单
+        - 批量
+        - 你好
+        - 帮助
+    target: deepseek/deepseek-v4-flash
+
+  - name: "deep_analysis"
+    priority: 10
+    match:
+      keywords:
+        - 深度分析
+        - 推理
+        - 重构
+        - 调试
+        - 优化
+        - 架构
+        - 代码审查
+    target: deepseek/deepseek-v4-pro
+
+  - name: "coding_tasks"
+    priority: 9
+    match:
+      keywords:
+        - 写代码
+        - 生成
+        - 脚本
+        - 程序
+        - 实现
+    target: deepseek/deepseek-v4-pro
+
+  - name: "local_fallback"
+    priority: 1
+    match:
+      keywords:
+        - /local
+        - 本地模型
+        - 离线
+        - 断网
+    target: local/qwen3.6-35b
+
+# --- 7. 知识库配置 ---
+knowledge_base:
+  enabled: true
+  storage_backend: "qdrant"
+  qdrant:
+    host: qdrant
+    port: 6333
+    collection_name: hermes_knowledge
+    vector_size: 1024
+    hybrid_search:
+      enabled: true
+      alpha: 0.5
+
+  sources:
+    - name: "obsidian_vault"
+      path: /knowledge_base/obsidian
+      enabled: true
+      auto_sync: true
+      file_extensions: [".md"]
+      exclude_patterns: [".obsidian/", ".trash/", "*/Template/*"]
+
+    - name: "documents"
+      path: /workspace/documents
+      enabled: true
+      auto_sync: false
+
+  retrieval:
+    top_k: 5
+    rerank:
+      enabled: true
+      api_url: http://reranker-llama:8000/rerank
+    score_threshold: 0.35
+
+# --- 8. 文件监听 ---
+file_watcher:
+  enabled: true
+  paths:
+    - /knowledge_base/obsidian
+  debounce_delay: 5s
+  recursive: true
+  events:
+    - create
+    - modify
+    - delete
+
+# --- 9. API Server ---
+api_server:
+  enabled: true
+  host: 0.0.0.0
+  port: 8000
+  api_key: ${API_SERVER_KEY}
+  cors:
+    allowed_origins: ["*"]
+    allowed_methods: ["GET", "POST", "PUT", "DELETE"]
+    allowed_headers: ["*"]
+
+# --- 10. 搜索配置 ---
+search:
+  enabled: true
+  engine: "searxng"
+  searxng_url: "http://searxng:4000/search?format=json"
+  max_results: 10
