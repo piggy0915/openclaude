@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path'
 import {
   DEFAULT_CODEX_BASE_URL,
   DEFAULT_OPENAI_BASE_URL,
+  DEFAULT_OPENCODE_BASE_URL,
   isCodexBaseUrl,
   parseOpenAICompatibleApiFormat,
   resolveCodexApiCredentials,
@@ -94,6 +95,7 @@ const PROFILE_ENV_KEYS = [
   'XAI_CREDENTIAL_SOURCE',
   'VENICE_API_KEY',
   'MIMO_API_KEY',
+  'OPENCODE_API_KEY',
 ] as const
 
 export type CompatibilityProfileMode =
@@ -118,6 +120,7 @@ const SECRET_ENV_KEYS = [
   'XAI_API_KEY',
   'VENICE_API_KEY',
   'MIMO_API_KEY',
+  'OPENCODE_API_KEY',
 ] as const
 
 export type ProviderProfile =
@@ -134,6 +137,7 @@ export type ProviderProfile =
   | 'bedrock'
   | 'vertex'
   | 'xai'
+  | 'opencode'
 
 export type ProfileEnv = {
   ANTHROPIC_BASE_URL?: string
@@ -175,6 +179,7 @@ export type ProfileEnv = {
   XAI_CREDENTIAL_SOURCE?: 'oauth'
   VENICE_API_KEY?: string
   MIMO_API_KEY?: string
+  OPENCODE_API_KEY?: string
 }
 
 export type ProfileFile = {
@@ -186,6 +191,7 @@ export type ProfileFile = {
 type SecretValueSource = Partial<
   Record<
     | 'OPENAI_API_KEY'
+    | 'ANTHROPIC_API_KEY'
     | 'OPENAI_AUTH_HEADER_VALUE'
     | 'CODEX_API_KEY'
     | 'GEMINI_API_KEY'
@@ -311,7 +317,8 @@ export function isProviderProfile(value: unknown): value is ProviderProfile {
     value === 'github' ||
     value === 'bedrock' ||
     value === 'vertex' ||
-    value === 'xai'
+    value === 'xai' ||
+    value === 'opencode'
   )
 }
 
@@ -448,22 +455,29 @@ export function buildMiniMaxProfileEnv(options: {
   if (!defaultBaseUrl || !defaultModel) {
     throw new Error('MiniMax route defaults are missing from integration metadata.')
   }
-  const secretSource: SecretValueSource = { OPENAI_API_KEY: key }
+  const secretSource: SecretValueSource = {
+    ANTHROPIC_API_KEY: key,
+    MINIMAX_API_KEY: key,
+    OPENAI_API_KEY: key,
+  }
 
   return {
-    OPENAI_BASE_URL:
+    ANTHROPIC_BASE_URL:
       sanitizeProviderConfigValue(options.baseUrl, secretSource) ||
-      sanitizeProviderConfigValue(processEnv.OPENAI_BASE_URL, secretSource) ||
+      sanitizeProviderConfigValue(processEnv.ANTHROPIC_BASE_URL, secretSource) ||
       defaultBaseUrl,
-    OPENAI_MODEL:
+    ANTHROPIC_MODEL:
       normalizeProfileModel(
         sanitizeProviderConfigValue(options.model, secretSource),
       ) ||
       normalizeProfileModel(
-        sanitizeProviderConfigValue(processEnv.OPENAI_MODEL, secretSource),
+        sanitizeProviderConfigValue(
+          processEnv.ANTHROPIC_MODEL ?? processEnv.OPENAI_MODEL,
+          secretSource,
+        ),
       ) ||
       defaultModel,
-    OPENAI_API_KEY: key,
+    ANTHROPIC_API_KEY: key,
     MINIMAX_API_KEY: key,
     MINIMAX_BASE_URL: defaultBaseUrl,
     MINIMAX_MODEL: defaultModel,
@@ -1396,6 +1410,28 @@ export async function buildLaunchEnv(options: {
       delete result.OPENAI_API_KEY
     }
     return result
+  }
+
+  if (options.profile === 'opencode') {
+    const opencodeKey =
+      sanitizeApiKey(processEnv.OPENCODE_API_KEY) ||
+      sanitizeApiKey(persistedEnv.OPENCODE_API_KEY)
+    const opencodeBaseUrl =
+      sanitizeProviderConfigValue(processEnv.OPENAI_BASE_URL) ||
+      sanitizeProviderConfigValue(persistedEnv.OPENAI_BASE_URL) ||
+      DEFAULT_OPENCODE_BASE_URL
+    const opencodeModel =
+      shellOpenAIModel || persistedOpenAIModel || 'gpt-5.4'
+
+    return buildCompatibilityProcessEnv({
+      processEnv,
+      compatibilityMode: 'openai',
+      profileEnv: {
+        OPENAI_BASE_URL: opencodeBaseUrl,
+        OPENAI_MODEL: opencodeModel,
+        ...(opencodeKey ? { OPENAI_API_KEY: opencodeKey } : {}),
+      },
+    })
   }
 
   if (options.profile === 'ollama') {
