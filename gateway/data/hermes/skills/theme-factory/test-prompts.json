@@ -1,1 +1,0 @@
-[{"id": 1, "prompt": "Apply the Ocean Depths theme to my slide deck", "expected": "Reads themes/Ocean-Depths, applies colors/fonts consistently"}, {"id": 2, "prompt": "Create a custom theme for a healthcare AI startup \u2014 professional but not cold, trustworthy but modern", "expected": "Generates new theme with appropriate colors/fonts, shows for review before applying"}]
