@@ -18,11 +18,8 @@ coverage/
 agent.log
 plan/
 .idea/
-gateway/backup/
-gateway/cache/
-gateway/embedding/
-gateway/logs/
-gateway/rerank/
+gateway/
 .bundled_manifest
 .curator_state
 .usage.json
+
