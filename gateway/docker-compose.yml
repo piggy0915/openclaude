@@ -239,9 +239,9 @@ services:
       - ./app:/app
       - ./data/hermes:/home/agent/.hermes
       - ./workspace:/workspace
-      - ./config/.env:/home/agent/.env:rw
-      - ./config/hermes/config.yaml:/home/agent/.hermes/config.yaml:rw
-      - ./config/hermes/config.yaml:/home/agent/config.yaml:rw
+      - ./config/.env:/home/agent/.env
+      - ./config/hermes/hermes.yaml:/home/agent/.hermes/config.yaml
+      - ./config/hermes/config.yaml:/home/agent/config.yaml
 
       - ./data/hermes/sessions:/home/agent/sessions
       - ./data/hermes/logs:/home/agent/logs
@@ -405,8 +405,8 @@ services:
       # 共享插件目录（只读）
       - ${HERMES_DATA_DIR:-./data/hermes}/plugins:/home/agent/.openclaude/plugins
       - ${HERMES_DATA_DIR:-./data/hermes}/skills:/home/agent/skills
-      - ${HERMES_CONFIG_DIR:-./config/hermes}/config.yaml:/home/agent/.hermes/config.yaml:rw
-      - ${HERMES_CONFIG_DIR:-./config/hermes}/config.yaml:/home/agent/config.yaml:rw
+      - ${HERMES_CONFIG_DIR:-./config/hermes}/hermes.yaml:/home/agent/.hermes/config.yaml
+      - ${HERMES_CONFIG_DIR:-./config/hermes}/config.yaml:/home/agent/config.yaml
 
       # ========== SSH 私钥挂载（建议只读） ==========
 #      - ~/.ssh:/root/.ssh:ro

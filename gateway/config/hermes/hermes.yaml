@@ -7,7 +7,7 @@
 
 # --- 1. 模型提供商配置（标准 Hermes 格式）---
 model:
-  default: deepseek-v4-flash
+  default: deepseek/deepseek-v4-flash
   provider: deepseek
   fallback: deepseek-v4-pro
   context_length: 1048576
