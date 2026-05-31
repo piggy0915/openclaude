@@ -1,8 +1,18 @@
+# ============================================================
+# Hermes Agent 配置文件
+# 云端：DeepSeek-V4-Flash（日常）+ DeepSeek-V4-Pro（深度）
+# 本地兜底：Windows llama.cpp + Qwen3.6-35B
+# Embedding/Rerank：容器内服务
+# ============================================================
+
+# --- 1. 模型提供商配置（标准 Hermes 格式）---
 model:
   default: deepseek-v4-flash
   provider: deepseek
   fallback: deepseek-v4-pro
-  fallback_provider: deepseek
+  context_length: 1048576
+  temperature: 0.7
+  max_tokens: 8192
 providers:
   deepseek:
     base_url: https://api.deepseek.com/v1
@@ -26,9 +36,14 @@ agent:
   disabled_toolsets: []
 terminal:
   backend: ssh
+  ssh_host: host.docker.internal
+  ssh_user: root
+  ssh_port: 22
+  ssh_key: /root/.ssh/id_rsa_hermes
+  workdir: /root
+  timeout: 180
   modal_mode: auto
   cwd: .
-  timeout: 180
   env_passthrough: []
   shell_init_files: []
   auto_source_bashrc: true
@@ -48,9 +63,6 @@ terminal:
   docker_extra_args: []
   docker_run_as_host_user: false
   persistent_shell: true
-  ssh_host: host.docker.internal
-  ssh_user: root
-  ssh_key_path: /root/.ssh/id_rsa_hermes
   pty: true
 web:
   backend: ''

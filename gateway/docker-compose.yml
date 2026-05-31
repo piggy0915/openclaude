@@ -240,7 +240,8 @@ services:
       - ./data/hermes:/home/agent/.hermes
       - ./workspace:/workspace
       - ./config/.env:/home/agent/.env:rw
-      - ./config/hermes/hermes.yaml:/home/agent/config.yaml:rw
+      - ./config/hermes/config.yaml:/home/agent/.hermes/config.yaml:rw
+      - ./config/hermes/config.yaml:/home/agent/config.yaml:rw
 
       - ./data/hermes/sessions:/home/agent/sessions
       - ./data/hermes/logs:/home/agent/logs
@@ -404,12 +405,14 @@ services:
       # 共享插件目录（只读）
       - ${HERMES_DATA_DIR:-./data/hermes}/plugins:/home/agent/.openclaude/plugins
       - ${HERMES_DATA_DIR:-./data/hermes}/skills:/home/agent/skills
-      - ${HERMES_DATA_DIR:-./data/hermes}/config.yaml:/home/agent/config.yaml:ro
+      - ${HERMES_CONFIG_DIR:-./config/hermes}/config.yaml:/home/agent/.hermes/config.yaml:rw
+      - ${HERMES_CONFIG_DIR:-./config/hermes}/config.yaml:/home/agent/config.yaml:rw
+
       # ========== SSH 私钥挂载（建议只读） ==========
-      - ~/.ssh:/root/.ssh:ro
-#      - ~/.ssh/id_rsa_hermes:/root/.ssh/id_rsa_hermes:ro  # 添加 :ro 只读权限更安全
-#      - ~/.ssh/id_rsa_hermes.pub:/home/agent/.ssh/id_rsa_hermes.pub:ro
-#      - ~/.ssh/known_hosts:/root/.ssh/known_hosts:ro  # 可选
+#      - ~/.ssh:/root/.ssh:ro
+      - ~/.ssh/id_rsa_hermes:/root/.ssh/id_rsa_hermes:ro  # 添加 :ro 只读权限更安全
+      - ~/.ssh/id_rsa_hermes.pub:/home/agent/.ssh/id_rsa_hermes.pub:ro
+      - ~/.ssh/known_hosts:/root/.ssh/known_hosts:ro  # 可选
 
     environment:
       - AGENT_ENDPOINT=http://hermes:8000  # WebUI连接Agent的地址

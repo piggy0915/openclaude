@@ -7,12 +7,17 @@
 
 # --- 1. 模型提供商配置（标准 Hermes 格式）---
 model:
-  default: deepseek/deepseek-v4-flash
+  default: deepseek-v4-flash
   provider: deepseek
-  base_url: https://api.deepseek.com/v1
+  fallback: deepseek-v4-pro
   context_length: 1048576
   temperature: 0.7
   max_tokens: 8192
+providers:
+  deepseek:
+    base_url: https://api.deepseek.com/v1
+    api_key: ${DEEPSEEK_API_KEY}
+fallback_providers: []
 
 # 你可以用 `hermes model` 交互式切换或 `/model` 在 session 中切换
 # 如果需要深度分析：`/model deepseek/deepseek-v4-pro`
@@ -23,37 +28,43 @@ agent:
   max_iterations: 50
   max_turns: 30
   timeout: 120
-  memory:
-    enabled: true
-    provider: qdrant
-    collection: hermes_memory
-    vector_db:
-      host: qdrant
-      port: 6333
-      api_key: dummy
+
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  memory_char_limit: 5000
+  user_char_limit: 2000
+  provider: qdrant
+  collection: hermes_memory
+  vector_db:
+    host: qdrant
+    port: 6333
 
 delegation:
-  max_iterations: 20
+  max_iterations: 50
 
 # --- 3. 工具配置 ---
-tools:
-  terminal:
-    backend: ssh
-    ssh_host: host.docker.internal
-    ssh_user: root
-    ssh_key_path: /root/.ssh/id_rsa_hermes
-    workdir: /root
-    timeout: 180
+terminal:
+  backend: ssh
+  ssh_host: host.docker.internal
+  ssh_user: root
+  ssh_port: 22
+  ssh_key: /root/.ssh/id_rsa_hermes
+  workdir: /root
+  timeout: 180
+  modal_mode: auto
+  cwd: .
 
-  web:
-    search_backend: cascading
-    extract_backend: firecrawl
-    cascading_search:
-      backends:
-        - provider: firecrawl
-        - provider: tavily
-        - provider: searxng
-          base_url: http://searxng:4000
+web:
+  search_backend: cascading
+  extract_backend: firecrawl
+  cascading_search:
+    backends:
+      - provider: firecrawl
+      - provider: tavily
+      - provider: searxng
+        base_url: http://searxng:4000
+
 
 # --- 4. 向量化配置 ---
 embeddings:
@@ -181,3 +192,9 @@ search:
   engine: "searxng"
   searxng_url: "http://searxng:4000/search?format=json"
   max_results: 10
+
+custom_providers:
+  - name: ik_llama.cpp
+    base_url: http://192.168.120.1:8000/v1
+    api_key: dummy
+    model: X:\models\qwen\Qwen3.6-35B-A3B-GGUF\Qwen3.6-35B-A3B-Q4_K_M.gguf
