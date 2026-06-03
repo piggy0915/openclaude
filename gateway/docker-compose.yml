@@ -230,8 +230,6 @@ services:
     ports:
       - "8003:8000"     # API Server 端口
       - "8005:8005"     # Dashboard 端口
-    # ========== 关键修复：使用宿主机用户 ID 运行容器 ==========
-#    user: "${UID:-1000}:${GID:-1000}"
     env_file:
       - ./config/.env
     volumes:
@@ -240,31 +238,29 @@ services:
       - ./data/hermes:/home/agent/.hermes
       - ./workspace:/workspace
       - ./config/.env:/home/agent/.env
-      - ./config/hermes/hermes.yaml:/home/agent/.hermes/config.yaml
-      - ./config/hermes/config.yaml:/home/agent/config.yaml
+#      - ./config/hermes/hermes.yaml:/home/agent/.hermes/config.yaml
+#      - ./config/hermes/config.yaml:/home/agent/config.yaml
 
-      - ./data/hermes/sessions:/home/agent/sessions
-      - ./data/hermes/logs:/home/agent/logs
-      - ./data/hermes/cache:/home/agent/cache
-      - ./data/hermes/credentials:/home/agent/credentials
+#      - ./data/hermes/sessions:/home/agent/sessions
+#      - ./data/hermes/logs:/home/agent/logs
+#      - ./data/hermes/cache:/home/agent/cache
+#      - ./data/hermes/credentials:/home/agent/credentials
 
       # ========== skill持久化相关挂载 ==========
-      - ./data/hermes/skills:/home/agent/skills  # 保留一个即可
+#      - ./data/hermes/skills:/home/agent/skills  # 保留一个即可
 
       # ========== 插件持久化相关挂载 ==========
-      - ./data/hermes/plugins:/opt/hermes/plugins  # 保留一个即可
-      # - ./data/hermes/plugins:/opt/plugins       # 删除这行，避免重复
+#      - ./data/hermes/plugins:/opt/hermes/plugins  # 保留一个即可
 
       - ./scripts:/home/agent/scripts
-      # - ./data/hermes/scripts/enter-hermes.sh:/home/agent/scripts/enter-hermes.sh:ro  # 已注释
       - ./config/openclaude/.openclaude.json:/root/.openclaude.json:rw
       - ./config/openclaude/settings.json:/root/.openclaude/settings.json:rw
 
       # ========== SSH 私钥挂载（建议只读） ==========
-#      - ~/.ssh:/root/.ssh:ro  # 添加 :ro 只读权限更安全
-      - ~/.ssh/id_rsa_hermes:/root/.ssh/id_rsa_hermes:ro  # 添加 :ro 只读权限更安全
-      - ~/.ssh/id_rsa_hermes.pub:/home/agent/.ssh/id_rsa_hermes.pub:ro
-      - ~/.ssh/known_hosts:/root/.ssh/known_hosts:ro  # 可选
+      - ~/.ssh:/root/.ssh:ro  # 添加 :ro 只读权限更安全
+#      - ~/.ssh/id_rsa_hermes:/root/.ssh/id_rsa_hermes:ro  # 添加 :ro 只读权限更安全
+#      - ~/.ssh/id_rsa_hermes.pub:/home/agent/.ssh/id_rsa_hermes.pub:ro
+#      - ~/.ssh/known_hosts:/root/.ssh/known_hosts:ro  # 可选
 
       # ========== Obsidian 知识库目录 ==========
       - ./data/obsidian/config:/knowledge_base/obsidian:rw
@@ -278,14 +274,6 @@ services:
       - XDG_CONFIG_HOME=/home/agent/.hermes
       - XDG_DATA_HOME=/home/agent/.hermes
       - XDG_CACHE_HOME=/home/agent/.hermes
-      # 安全标志
-      #- HERMES_ALLOW_INSECURE=true
-      - WEIXIN_DM_POLICY=open
-      - WEIXIN_GROUP_POLICY=disabled
-
-      # --- 核心：完全替代 .env 文件的功能 ---
-      # 1. 确保 Hermes 能找到自己的配置文件
-      #- HERMES_HOME=/root/.hermes
       - GATEWAY_ALLOW_ALL_USERS=true
 
       # 2. (可选但推荐) 为了防止冲突，可以清除任何可能从宿主机继承的代理设置
@@ -302,8 +290,8 @@ services:
       - API_SERVER_KEY=${API_SERVER_KEY:-sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V}
 
       # 禁用可能冲突的功能
-      - HERMES_LOG_LEVEL=debug
-      - DISABLE_MESSAGING_PLATFORMS=true
+#      - HERMES_LOG_LEVEL=debug
+#      - DISABLE_MESSAGING_PLATFORMS=true
 
       # ========== 插件相关环境变量 ==========
       # 启用插件系统
@@ -368,6 +356,7 @@ services:
 #        /home/agent/scripts/entrypoint.sh &&
 #        exec /init gateway run
 #      "
+#    command: ["gateway", "run"]
     networks:
       - rag-network
     healthcheck:
@@ -391,7 +380,7 @@ services:
         max-file: "3"
 
   hermes-webui:
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.5}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.9}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
 #    user: "${UID:-1000}:${GID:-1000}"
     ports:
@@ -409,10 +398,12 @@ services:
 #      - ${HERMES_CONFIG_DIR:-./config/hermes}/config.yaml:/home/agent/config.yaml
 
       # ========== SSH 私钥挂载（建议只读） ==========
-#      - ~/.ssh:/root/.ssh:ro
-      - ~/.ssh/id_rsa_hermes:/root/.ssh/id_rsa_hermes:ro  # 添加 :ro 只读权限更安全
-      - ~/.ssh/id_rsa_hermes.pub:/home/agent/.ssh/id_rsa_hermes.pub:ro
-      - ~/.ssh/known_hosts:/root/.ssh/known_hosts:ro  # 可选
+      - ~/.ssh:/root/.ssh:ro
+#      - ~/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
+#      - ~/.ssh/id_ed25519.pub:/home/agent/.ssh/id_ed25519.pub:ro
+#      - ~/.ssh/id_rsa_hermes:/root/.ssh/id_rsa_hermes:ro  # 添加 :ro 只读权限更安全
+#      - ~/.ssh/id_rsa_hermes.pub:/home/agent/.ssh/id_rsa_hermes.pub:ro
+#      - ~/.ssh/known_hosts:/root/.ssh/known_hosts:ro  # 可选
 
     environment:
       - AGENT_ENDPOINT=http://hermes:8000  # WebUI连接Agent的地址
