@@ -4,6 +4,10 @@
 set -e
 
 HERMES_DIR="./data/hermes"
+WEBUI_DIR="./data/hermes-web-ui"
+NODE_MODULES_DIR="./data/node_modules"
+APP_DIR="./data/app"
+WORKSPACE_DIR="./data/workspace"
 CONTAINER_NAME="hermes"
 
 echo "=== 1. 停止容器 ==="
@@ -14,22 +18,30 @@ rm -f $HERMES_DIR/gateway.lock \
        $HERMES_DIR/gateway.pid \
        $HERMES_DIR/state.db-wal \
        $HERMES_DIR/state.db-shm \
-       $HERMES_DIR/hermes-web-ui/*.db-wal \
-       $HERMES_DIR/hermes-web-ui/*.db-shm 2>/dev/null || true
+       $WEBUI_DIR/*.db-wal \
+       $WEBUI_DIR/*.db-shm 2>/dev/null || true
 
 echo "=== 3. 修复目录归属（使用容器内 hermes 用户 UID 10000）==="
 # 修改为 10000:10000 以匹配容器内的 hermes 用户
 sudo chown -R 10000:10000 $HERMES_DIR
 sudo chmod -R 755 $HERMES_DIR
+sudo chown -R 10000:10000 $WEBUI_DIR
+sudo chmod -R 755 $WEBUI_DIR
+sudo chown -R 10000:10000 $NODE_MODULES_DIR
+sudo chmod -R 755 $NODE_MODULES_DIR
+sudo chown -R 10000:10000 $APP_DIR
+sudo chmod -R 755 $APP_DIR
+sudo chown -R 10000:10000 $WORKSPACE_DIR
+sudo chmod -R 755 $WORKSPACE_DIR
 
 # 特别确保日志目录存在且可写
 mkdir -p $HERMES_DIR/logs
 mkdir -p $HERMES_DIR/.hermes/logs
-mkdir -p $HERMES_DIR/hermes-web-ui
 mkdir -p $HERMES_DIR/sessions
 mkdir -p $HERMES_DIR/cache
 mkdir -p $HERMES_DIR/credentials
 mkdir -p $HERMES_DIR/skills
+
 
 echo "=== 4. 确保关键子目录可写 ==="
 find "$HERMES_DIR" -type d -print0 | while IFS= read -r -d '' dir; do
@@ -49,10 +61,9 @@ find "$HERMES_DIR" -type d -print0 | while IFS= read -r -d '' dir; do
     fi
 done
 
-sudo chown -R 10000:10000 $HERMES_DIR/logs $HERMES_DIR/.hermes/logs $HERMES_DIR/hermes-web-ui
+sudo chown -R 10000:10000 $HERMES_DIR/logs $HERMES_DIR/.hermes/logs
 sudo chmod -R 775 $HERMES_DIR/logs
 sudo chmod -R 775 $HERMES_DIR/.hermes/logs
-sudo chmod -R 775 $HERMES_DIR/hermes-web-ui
 sudo chmod -R 775 $HERMES_DIR/sessions
 sudo chmod -R 775 $HERMES_DIR/cache
 sudo chmod -R 775 $HERMES_DIR/credentials
@@ -68,10 +79,10 @@ done
 
 echo "=== 6. 修复工作目录和配置目录 ==="
 # 修复 workspace 目录
-if [ -d "./workspace" ]; then
-    sudo chown -R 10000:10000 ./workspace
-    sudo chmod -R 755 ./workspace
-    echo "  ✓ ./workspace"
+if [ -d WORKSPACE_DIR ]; then
+    sudo chown -R 10000:10000 WORKSPACE_DIR
+    sudo chmod -R 755 WORKSPACE_DIR
+    echo "  ✓ ./data/workspace"
 fi
 
 # 修复 config 目录
@@ -82,10 +93,10 @@ if [ -d "./config" ]; then
 fi
 
 # 修复 app 目录
-if [ -d "./app" ]; then
-    sudo chown -R 10000:10000 ./app
-    sudo chmod -R 755 ./app
-    echo "  ✓ ./app"
+if [ -d APP_DIR ]; then
+    sudo chown -R 10000:10000 APP_DIR
+    sudo chmod -R 755 APP_DIR
+    echo "  ✓ ./data/app"
 fi
 
 # 修复 scripts 目录（确保 entrypoint.sh 可执行）

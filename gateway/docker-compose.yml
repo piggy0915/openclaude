@@ -234,36 +234,20 @@ services:
       - ./config/.env
     volumes:
       - hermes_node_modules_volume:/usr/lib/node_modules
-      - ./app:/app
-      - ./data/hermes:/home/agent/.hermes
-      - ./workspace:/workspace
-      - ./config/.env:/home/agent/.env
-#      - ./config/hermes/hermes.yaml:/home/agent/.hermes/config.yaml
-#      - ./config/hermes/config.yaml:/home/agent/config.yaml
-
-#      - ./data/hermes/sessions:/home/agent/sessions
-#      - ./data/hermes/logs:/home/agent/logs
-#      - ./data/hermes/cache:/home/agent/cache
-#      - ./data/hermes/credentials:/home/agent/credentials
-
-      # ========== skill持久化相关挂载 ==========
-#      - ./data/hermes/skills:/home/agent/skills  # 保留一个即可
-
-      # ========== 插件持久化相关挂载 ==========
-#      - ./data/hermes/plugins:/opt/hermes/plugins  # 保留一个即可
-
-      - ./scripts:/home/agent/scripts
-      - ./config/openclaude/.openclaude.json:/root/.openclaude.json:rw
-      - ./config/openclaude/settings.json:/root/.openclaude/settings.json:rw
+      - hermes_data_volume:/home/agent/.hermes
+      - hermes_scripts_volume:/home/agent/scripts
 
       # ========== SSH 私钥挂载（建议只读） ==========
-      - ~/.ssh:/root/.ssh:ro  # 添加 :ro 只读权限更安全
-#      - ~/.ssh/id_rsa_hermes:/root/.ssh/id_rsa_hermes:ro  # 添加 :ro 只读权限更安全
-#      - ~/.ssh/id_rsa_hermes.pub:/home/agent/.ssh/id_rsa_hermes.pub:ro
-#      - ~/.ssh/known_hosts:/root/.ssh/known_hosts:ro  # 可选
+      - ssh_volume:/root/.ssh:ro  # 添加 :ro 只读权限更安全
 
       # ========== Obsidian 知识库目录 ==========
       - ./data/obsidian/config:/knowledge_base/obsidian:rw
+
+      - workspace_volume:/opt/data
+      - app_volume:/app
+      - ./config/.env:/home/agent/.env
+      - ./config/openclaude/.openclaude.json:/root/.openclaude.json:rw
+      - ./config/openclaude/settings.json:/root/.openclaude/settings.json:rw
 
     environment:
       - TZ=Asia/Shanghai          # 设置时区
@@ -297,7 +281,7 @@ services:
       # 启用插件系统
       - HERMES_PLUGINS_ENABLED=true
       - HERMES_PLUGINS_DIR=/opt/hermes/plugins
-      - CLAUDE_PLUGINS_DIR=/root/.openclaude/plugins
+      - CLAUDE_PLUGINS_DIR=/root/.hermes/plugins
       - PATH=/opt/hermes/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       - PYTHONPATH=/opt/hermes/.venv/lib/python3.11/site-packages
       - AUTOLOAD_PLUGINS=true
@@ -360,7 +344,8 @@ services:
     networks:
       - rag-network
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+#      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -380,30 +365,29 @@ services:
         max-file: "3"
 
   hermes-webui:
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.9}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.10}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
 #    user: "${UID:-1000}:${GID:-1000}"
     ports:
       - "${PORT:-6060}:${PORT:-6060}"
       - "${PREVIEW_FRONTEND_PORT:-8651}:8651"
       - "${XAI_OAUTH_PORT:-56121}:56121"
+    env_file:
+      - ./config/.env
     volumes:
-      - ${HERMES_DATA_DIR:-./data/hermes}:/home/agent/.hermes
-      - ${HERMES_DATA_DIR:-./data/hermes}/hermes-web-ui:/home/agent/.hermes-web-ui
+      - hermes_node_modules_volume:/usr/lib/node_modules
+      - hermes_data_volume:/home/agent/.hermes
+      - hermes_webui_data_volume:/home/agent/.hermes-web-ui
 
       # 共享插件目录（只读）
-      - ${HERMES_DATA_DIR:-./data/hermes}/plugins:/home/agent/.openclaude/plugins
-      - ${HERMES_DATA_DIR:-./data/hermes}/skills:/home/agent/skills
+      - hermes_webui_plugins_volume:/home/agent/.hermes/plugins
+      - hermes_webui_skills_volume:/home/agent/.hermes/skills
 #      - ${HERMES_CONFIG_DIR:-./config/hermes}/hermes.yaml:/home/agent/.hermes/config.yaml
 #      - ${HERMES_CONFIG_DIR:-./config/hermes}/config.yaml:/home/agent/config.yaml
 
       # ========== SSH 私钥挂载（建议只读） ==========
-      - ~/.ssh:/root/.ssh:ro
-#      - ~/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
-#      - ~/.ssh/id_ed25519.pub:/home/agent/.ssh/id_ed25519.pub:ro
-#      - ~/.ssh/id_rsa_hermes:/root/.ssh/id_rsa_hermes:ro  # 添加 :ro 只读权限更安全
-#      - ~/.ssh/id_rsa_hermes.pub:/home/agent/.ssh/id_rsa_hermes.pub:ro
-#      - ~/.ssh/known_hosts:/root/.ssh/known_hosts:ro  # 可选
+      - ssh_volume:/root/.ssh:ro
+      - workspace_volume:/opt/data
 
     environment:
       - AGENT_ENDPOINT=http://hermes:8000  # WebUI连接Agent的地址
@@ -515,12 +499,74 @@ services:
 volumes:
   hermes_node_modules_volume:
     # 可选配置
+    name: hermes_node_modules  # 指定卷名称（不指定则自动生成）
+    driver: local  # 默认就是 local
+    driver_opts:   # 高级选项
+      type: none
+      device: ${PWD}/data/node_modules
+      o: bind
+  hermes_data_volume:
+    # 可选配置
     name: hermes_data  # 指定卷名称（不指定则自动生成）
-    # driver: local  # 默认就是 local
-    # driver_opts:   # 高级选项
-    #   type: none
-    #   device: /path
-    #   o: bind
+    driver: local  # 默认就是 local
+    driver_opts:   # 高级选项
+      type: none
+      device: ${PWD}/data/hermes
+      o: bind
+  hermes_webui_data_volume:
+    # 可选配置
+    name: hermes_webui_data  # 指定卷名称（不指定则自动生成）
+    driver: local  # 默认就是 local
+    driver_opts: # 高级选项
+      type: none
+      device: ${PWD}/data/hermes-web-ui
+      o: bind
+  hermes_scripts_volume:
+    # 可选配置
+    name: hermes_scripts
+    driver: local  # 默认就是 local
+    driver_opts:   # 高级选项
+      type: none
+      device: ${PWD}/scripts
+      o: bind
+  hermes_webui_plugins_volume:
+    name: hermes_webui_plugins
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/data/hermes/plugins
+      o: bind
+  hermes_webui_skills_volume:
+    name: hermes_webui_skills
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/data/hermes/skills
+      o: bind
+  app_volume:
+    # 可选配置
+    name: hermes_app
+    driver: local  # 默认就是 local
+    driver_opts:   # 高级选项
+      type: none
+      device: ${PWD}/data/app
+      o: bind
+  workspace_volume:
+    # 可选配置
+    name: hermes_workspace
+    driver: local  # 默认就是 local
+    driver_opts:   # 高级选项
+      type: none
+      device: ${PWD}/data/workspace
+      o: bind
+  ssh_volume:
+    # 可选配置
+    name: hermes_ssh
+    driver: local  # 默认就是 local
+    driver_opts:   # 高级选项
+      type: none
+      device: ${HOME}/.ssh
+      o: bind
 
 # ============================================================
 # 网络配置
