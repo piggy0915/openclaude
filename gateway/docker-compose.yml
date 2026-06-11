@@ -187,7 +187,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
       # 可选：设置 API 密钥（生产环境强烈建议）
-      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY:-}
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY:-sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V}
       # 可选：配置日志级别
       - QDRANT__LOG_LEVEL=INFO
       # 优化内存使用
@@ -223,7 +223,7 @@ services:
   # Hermes - AI Agent
   # ============================================================
   hermes:
-    image: hermes-agent:v2026.5.29.2
+    image: hermes-agent:v2026.6.5
 #    image: nousresearch/hermes-agent:v2026.5.16
     container_name: hermes
     restart: unless-stopped
@@ -245,6 +245,7 @@ services:
 
       - workspace_volume:/opt/data
       - app_volume:/app
+      - openclaude_volume:/root/.openclaude
       - ./config/.env:/home/agent/.env
       - ./config/openclaude/.openclaude.json:/root/.openclaude.json:rw
       - ./config/openclaude/settings.json:/root/.openclaude/settings.json:rw
@@ -365,7 +366,7 @@ services:
         max-file: "3"
 
   hermes-webui:
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.10}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.13}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
 #    user: "${UID:-1000}:${GID:-1000}"
     ports:
@@ -496,6 +497,26 @@ services:
           cpus: '0.5'      # Rerank 计算量略小于 embedding
           memory: 1G
 
+  elasticsearch:
+    image: elasticsearch:9.4.2
+    container_name: elasticsearch
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      # 时区上海
+      TZ: Asia/Shanghai
+      # 设置集群名称
+      cluster.name: elasticsearch
+      # 以单一节点模式启动
+      discovery.type: single-node
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m -Xss512k -XX:+UseContainerSupport"
+    volumes:
+      - /docker/elk/elasticsearch/plugins:/usr/share/elasticsearch/plugins
+      - /docker/elk/elasticsearch/data:/usr/share/elasticsearch/data
+      - /docker/elk/elasticsearch/logs:/usr/share/elasticsearch/logs
+
+
 volumes:
   hermes_node_modules_volume:
     # 可选配置
@@ -542,6 +563,14 @@ volumes:
     driver_opts:
       type: none
       device: ${PWD}/data/hermes/skills
+      o: bind
+  openclaude_volume:
+    # 可选配置
+    name: openclaude_config
+    driver: local  # 默认就是 local
+    driver_opts:   # 高级选项
+      type: none
+      device: ${HOME}/.openclaude
       o: bind
   app_volume:
     # 可选配置

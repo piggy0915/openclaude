@@ -26,3 +26,5 @@ coverage/
 agent.log
 plan/
 temp_reference/
+/gateway/home/
+/home/

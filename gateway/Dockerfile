@@ -1,5 +1,5 @@
 # Dockerfile
-FROM nousresearch/hermes-agent:v2026.5.29.2
+FROM nousresearch/hermes-agent:v2026.6.5
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 USER root
 
