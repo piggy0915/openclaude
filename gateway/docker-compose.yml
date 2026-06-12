@@ -497,24 +497,24 @@ services:
           cpus: '0.5'      # Rerank 计算量略小于 embedding
           memory: 1G
 
-  elasticsearch:
-    image: elasticsearch:9.4.2
-    container_name: elasticsearch
-    ports:
-      - "9200:9200"
-      - "9300:9300"
-    environment:
-      # 时区上海
-      TZ: Asia/Shanghai
-      # 设置集群名称
-      cluster.name: elasticsearch
-      # 以单一节点模式启动
-      discovery.type: single-node
-      ES_JAVA_OPTS: "-Xms512m -Xmx512m -Xss512k -XX:+UseContainerSupport"
-    volumes:
-      - /docker/elk/elasticsearch/plugins:/usr/share/elasticsearch/plugins
-      - /docker/elk/elasticsearch/data:/usr/share/elasticsearch/data
-      - /docker/elk/elasticsearch/logs:/usr/share/elasticsearch/logs
+#  elasticsearch:
+#    image: elasticsearch:9.4.2
+#    container_name: elasticsearch
+#    ports:
+#      - "9200:9200"
+#      - "9300:9300"
+#    environment:
+#      # 时区上海
+#      TZ: Asia/Shanghai
+#      # 设置集群名称
+#      cluster.name: elasticsearch
+#      # 以单一节点模式启动
+#      discovery.type: single-node
+#      ES_JAVA_OPTS: "-Xms512m -Xmx512m -Xss512k -XX:+UseContainerSupport"
+#    volumes:
+#      - /docker/elk/elasticsearch/plugins:/usr/share/elasticsearch/plugins
+#      - /docker/elk/elasticsearch/data:/usr/share/elasticsearch/data
+#      - /docker/elk/elasticsearch/logs:/usr/share/elasticsearch/logs
 
 
 volumes:
