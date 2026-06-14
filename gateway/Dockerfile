@@ -7,28 +7,21 @@ USER root
 RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack && \
     rm -rf /usr/local/lib/node_modules && \
     apt-get remove -y nodejs npm || true && \
-    apt-get autoremove -y || true
-
-# 安装新 Node.js 24.x
-#RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
-#    apt-get install -y nodejs python3-pip && \
-#    npm install -g npm@latest && \
-#    npm config set prefix /usr -g && \
-#    pip3 install 'qdrant-client>=1.12.0' && \
-#    npm cache clean --force && \
-#    apt-get clean && \
-#    rm -rf /var/lib/apt/lists/*
-
-RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
+    apt-get autoremove -y || true && \
+    apt-get update && \
+    # 使用 NodeSource 安装 Node.js 24（不要再用 curl 下载二进制）
+    curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
     apt-get install -y nodejs python3-pip && \
-    # 直接使用默认位置，但通过环境变量临时改变 prefix
-    export npm_config_prefix=/usr/local && \
     npm config set registry https://registry.npmmirror.com && \
     pip3 install 'qdrant-client>=1.12.0' && \
     npm install -g npm@latest && \
     npm cache clean --force && \
     # 恢复默认 prefix
     npm config delete prefix && \
+    node --version && \
+    ln -sf /usr/bin/node /usr/local/bin/node && \
+    ln -sf /usr/bin/npm /usr/local/bin/npm && \
+    ln -sf /usr/bin/npx /usr/local/bin/npx && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

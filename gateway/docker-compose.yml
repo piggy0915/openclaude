@@ -366,7 +366,7 @@ services:
         max-file: "3"
 
   hermes-webui:
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.13}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.14}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
 #    user: "${UID:-1000}:${GID:-1000}"
     ports:
