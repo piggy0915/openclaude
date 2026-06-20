@@ -11,7 +11,7 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     apt-get remove -y nodejs npm || true && \
     apt-get autoremove -y || true && \
     apt-get update && \
-    # 使用 NodeSource 安装 Node.js 24（不要再用 curl 下载二进制）
+    # 使用 NodeSource 安装 Node.js 24(不要再用 curl 下载二进制)
     curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - && \
     apt-get install -y nodejs python3-pip && \
     # 配置npm镜像源
