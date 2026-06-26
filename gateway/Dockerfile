@@ -1,5 +1,5 @@
 # Dockerfile
-FROM nousresearch/hermes-agent:v2026.6.19
+FROM nousresearch/hermes-agent:main
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 ENV NODE_VERSION=24
 ENV NPM_CONFIG_REGISTRY=https://registry.npmmirror.com

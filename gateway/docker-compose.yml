@@ -223,19 +223,20 @@ services:
   # Hermes - AI Agent
   # ============================================================
   hermes:
-    image: hermes-agent:v2026.6.19
+    image: hermes-agent:v2026.6.5
 #    image: nousresearch/hermes-agent:v2026.5.16
     container_name: hermes
     restart: unless-stopped
     ports:
-      - "8003:8000"     # API Server 端口
-      - "8005:8005"     # Dashboard 端口
+      - "8642:8642"     # API Server 端口
+      - "9119:9119"     # Dashboard 端口
     env_file:
       - ./config/.env
     volumes:
       - hermes_node_modules_volume:/usr/lib/node_modules
       - hermes_data_volume:/home/agent/.hermes
       - hermes_scripts_volume:/home/agent/scripts
+      - hermes_webui_data_volume:/home/agent/.hermes-web-ui
 
       # ========== SSH 私钥挂载（建议只读） ==========
       - ssh_volume:/root/.ssh:ro  # 添加 :ro 只读权限更安全
@@ -244,7 +245,7 @@ services:
       - ./data/obsidian/config:/knowledge_base/obsidian:rw
 
       - workspace_volume:/opt/data
-      - app_volume:/app
+      - app_volume:/app:ro
       - openclaude_volume:/root/.openclaude
       - ./config/.env:/home/agent/.env
       - ./config/openclaude/.openclaude.json:/root/.openclaude.json:rw
@@ -254,6 +255,7 @@ services:
       - TZ=Asia/Shanghai          # 设置时区
       - HERMES_HOME=/home/agent/.hermes  # 关键：修改 HOME 目录
       - HERMES_ALLOW_ROOT_GATEWAY=1
+#      - HERMES_MCP_ENABLED=false
 #      - HERMES_UID=${UID:-1000}
 #      - HERMES_GID=${GID:-1000}
       - XDG_CONFIG_HOME=/home/agent/.hermes
@@ -326,22 +328,6 @@ services:
 
     # 🆕 添加入口脚本
     entrypoint: ["/home/agent/scripts/entrypoint.sh"]
-#    command: >
-#      bash -c "
-#        echo '=== Installing plugins ===' &&
-#        if [ -f /home/agent/init-plugins.sh ]; then
-#          chmod +x /home/agent/init-plugins.sh &&
-#          /home/agent/init-plugins.sh
-#        fi &&
-#        echo '=== Starting Hermes Gateway ===' &&
-#        exec /init gateway run
-#      "
-#    command: >
-#      bash -c "
-#        /home/agent/scripts/entrypoint.sh &&
-#        exec /init gateway run
-#      "
-#    command: ["gateway", "run"]
     networks:
       - rag-network
     healthcheck:
@@ -366,7 +352,7 @@ services:
         max-file: "3"
 
   hermes-webui:
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.17}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.18}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
 #    user: "${UID:-1000}:${GID:-1000}"
     ports:
@@ -389,9 +375,10 @@ services:
       # ========== SSH 私钥挂载（建议只读） ==========
       - ssh_volume:/root/.ssh:ro
       - workspace_volume:/opt/data
+      - app_volume:/app:ro
 
     environment:
-      - AGENT_ENDPOINT=http://hermes:8000  # WebUI连接Agent的地址
+      - AGENT_ENDPOINT=http://hermes:8642  # WebUI连接Agent的地址
       - PORT=${PORT:-6060}
       - HERMES_HOME=/home/agent/.hermes
       - HERMES_BIN=/opt/hermes/.venv/bin/hermes
@@ -419,8 +406,8 @@ services:
       - rag-network
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
-      - hermes
+#    depends_on:
+#      - hermes
     deploy:
       resources:
         limits:
@@ -578,7 +565,7 @@ volumes:
     driver: local  # 默认就是 local
     driver_opts:   # 高级选项
       type: none
-      device: ${PWD}/data/app
+      device: ${PWD}/app
       o: bind
   workspace_volume:
     # 可选配置
