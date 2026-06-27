@@ -49,7 +49,7 @@ fi
 # 确保全局包的命令可用
 if [ -f /usr/lib/node_modules/@gitlawb/openclaude/bin/openclaude ]; then
     echo "Creating symlink for openclaude..."
-    ln -sf /usr/lib/node_modules/@gitlawb/openclaude/bin/openclaude /usr/bin/openclaude
+#    ln -sf /usr/lib/node_modules/@gitlawb/openclaude/bin/openclaude /usr/bin/openclaude
 else
     echo "⚠ openclaude not found at expected path"
 fi
@@ -57,8 +57,8 @@ fi
 # 创建 reasonix 符号链接（正确路径）
 if [ -f /usr/lib/node_modules/reasonix/dist/cli/index.js ]; then
     echo "Creating symlink for reasonix..."
-    ln -sf /usr/lib/node_modules/reasonix/dist/cli/index.js /usr/bin/reasonix
-    chmod +x /usr/bin/reasonix
+#    ln -sf /usr/lib/node_modules/reasonix/dist/cli/index.js /usr/bin/reasonix
+#    chmod +x /usr/bin/reasonix
     echo "✓ reasonix symlink created from dist/cli/index.js"
 else
     echo "⚠ reasonix not found at expected path"

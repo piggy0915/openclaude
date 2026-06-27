@@ -18,6 +18,14 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     npm config set registry ${NPM_CONFIG_REGISTRY} && \
     # 安装Python包
     pip3 install 'qdrant-client>=1.12.0' && \
+    # 预装 Hermes 懒加载 SDK
+    /opt/hermes/.venv/bin/pip install \
+        'firecrawl-py>=4.17.0' \
+        'lark-oapi==1.5.3' \
+        'qrcode==7.4.2' \
+        'dingtalk-stream==0.24.3' \
+        'alibabacloud-dingtalk==2.2.42' \
+        && \
     # 升级npm到最新版本
     npm install -g npm@latest && \
     npm cache clean --force && \
