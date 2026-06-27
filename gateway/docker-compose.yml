@@ -223,7 +223,7 @@ services:
   # Hermes - AI Agent
   # ============================================================
   hermes:
-    image: hermes-agent:v2026.6.5
+    image: hermes-agent:main
 #    image: nousresearch/hermes-agent:v2026.5.16
     container_name: hermes
     restart: unless-stopped
@@ -352,7 +352,7 @@ services:
         max-file: "3"
 
   hermes-webui:
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.18}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.21}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
 #    user: "${UID:-1000}:${GID:-1000}"
     ports:

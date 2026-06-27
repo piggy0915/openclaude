@@ -16,8 +16,9 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     apt-get install -y nodejs python3-pip && \
     # 配置npm镜像源
     npm config set registry ${NPM_CONFIG_REGISTRY} && \
+    python3 -m venv /opt/hermes/.venv && \
     # 安装Python包
-    pip3 install 'qdrant-client>=1.12.0' && \
+    /opt/hermes/.venv/bin/pip install 'qdrant-client>=1.12.0' && \
     # 预装 Hermes 懒加载 SDK
     /opt/hermes/.venv/bin/pip install \
         'firecrawl-py>=4.17.0' \
