@@ -18,9 +18,8 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     npm config set registry ${NPM_CONFIG_REGISTRY} && \
     python3 -m venv /opt/hermes/.venv && \
     # 安装Python包
-    /opt/hermes/.venv/bin/pip install 'qdrant-client>=1.12.0' && \
-    # 预装 Hermes 懒加载 SDK
-    /opt/hermes/.venv/bin/pip install \
+    uv pip install --python /opt/hermes/.venv/bin/python3 \
+        'qdrant-client>=1.12.0' \
         'firecrawl-py>=4.17.0' \
         'lark-oapi==1.5.3' \
         'qrcode==7.4.2' \
