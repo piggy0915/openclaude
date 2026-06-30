@@ -4,7 +4,7 @@ version: '3.8'
 services:
 
   tailscale:
-    image: tailscale/tailscale:latest
+    image: tailscale/tailscale:stable
     hostname: hermes-vm
     container_name: tailscale
     restart: unless-stopped
