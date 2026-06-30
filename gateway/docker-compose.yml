@@ -11,7 +11,7 @@ services:
     environment:
       - TS_AUTHKEY=   # 可选：预认证密钥，免手动跳转登录
     volumes:
-      - /opt/tailscale/data:/var/lib/tailscale   # 持久化状态，重启后IP不变
+      - ./opt/tailscale/data:/var/lib/tailscale   # 持久化状态，重启后IP不变
       - /dev/net/tun:/dev/net/tun
     cap_add:
       - NET_ADMIN
