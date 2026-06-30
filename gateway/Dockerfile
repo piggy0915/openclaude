@@ -5,6 +5,12 @@ ENV NODE_VERSION=24
 ENV NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
 USER root
 
+# AgentChat: Chromium 存持久卷
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/agent/.hermes/playwright-data
+
+# AgentChat: s6 chrome-cdp 服务
+COPY chrome-cdp/ /opt/hermes/docker/s6-rc.d/chrome-cdp/
+RUN echo "chrome-cdp" >> /opt/hermes/docker/s6-rc.d/user/contents.d/chrome-cdp
 # 彻底移除旧 Node.js（包括 /usr/local/bin/ 下的多阶段构建产物）
 RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack && \
     rm -rf /usr/local/lib/node_modules && \
@@ -25,6 +31,7 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
         'qrcode==7.4.2' \
         'dingtalk-stream==0.24.3' \
         'alibabacloud-dingtalk==2.2.42' \
+        'playwright>=1.45' \
         && \
     # 升级npm到最新版本
     npm install -g npm@latest && \
@@ -35,6 +42,9 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     ln -sf /usr/bin/node /usr/local/bin/node && \
     ln -sf /usr/bin/npm /usr/local/bin/npm && \
     ln -sf /usr/bin/npx /usr/local/bin/npx && \
+    # 下载完整版 Chromium 到持久卷（支持 CDP）
+    mkdir -p /home/agent/.hermes/playwright-data && \
+    /opt/hermes/.venv/bin/python3 -m playwright install chromium && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

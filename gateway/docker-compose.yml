@@ -3,6 +3,21 @@ version: '3.8'
 
 services:
 
+  tailscale:
+    image: tailscale/tailscale:latest
+    hostname: hermes-vm
+    container_name: tailscale
+    restart: unless-stopped
+    environment:
+      - TS_AUTHKEY=   # 可选：预认证密钥，免手动跳转登录
+    volumes:
+      - /opt/tailscale/data:/var/lib/tailscale   # 持久化状态，重启后IP不变
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    network_mode: host   # 关键：直接走宿主机网络，所有容器服务都可达
+
   # ============================================================
   # Coze 适配器 - 将 Coze 请求转换为 Hermes API
   # ============================================================
@@ -58,9 +73,9 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./data/obsidian/config:/config       # Obsidian 配置和笔记数据
-      - ./data/obsidian/workspace:/workspace # 可选：工作空间
-      - ./data/obsidian/knowledge:/knowledge_base/obsidian:rw
+      - ./data/obsidian/config:/config          # 配置文件（独立）
+      - ./data/obsidian/workspace:/workspace    # 工作空间（独立）
+      - hermes_obsidian_volume:/knowledge_base/obsidian  # 笔记数据（共享给 hermes）
     environment:
       - PUID=1000
       - PGID=1000
@@ -86,14 +101,19 @@ services:
     restart: unless-stopped
     env_file:
       - ./config/.env
-
     volumes:
-      - ./data/obsidian/knowledge:/knowledge_base/obsidian:rw
+#      - ./data/obsidian/knowledge:/knowledge_base/obsidian:rw
+      - hermes_obsidian_volume:/knowledge_base/obsidian:rw
       - ./scripts/syncObsidian2Qdrant.py:/sync.py:ro
     environment:
       - OBSIDIAN_VAULT_PATH=/knowledge_base/obsidian
-      - HERMES_API_URL=http://hermes:8000
+      - HERMES_API_URL=http://hermes:8642
       - API_SERVER_KEY=${API_SERVER_KEY:-sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V}
+      - SYNC_INTERVAL=${SYNC_INTERVAL:-300}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1  # 实时输出日志
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
     command: >
       bash -c "
         pip install watchdog requests &&
@@ -237,12 +257,13 @@ services:
       - hermes_data_volume:/home/agent/.hermes
       - hermes_scripts_volume:/home/agent/scripts
       - hermes_webui_data_volume:/home/agent/.hermes-web-ui
+      - hermes_obsidian_volume:/knowledge_base/obsidian:rw
 
       # ========== SSH 私钥挂载（建议只读） ==========
       - ssh_volume:/root/.ssh:ro  # 添加 :ro 只读权限更安全
 
       # ========== Obsidian 知识库目录 ==========
-      - ./data/obsidian/config:/knowledge_base/obsidian:rw
+#      - ./data/obsidian/knowledge:/knowledge_base/obsidian:rw
 
       - workspace_volume:/opt/data
       - app_volume:/app:ro
@@ -254,6 +275,7 @@ services:
     environment:
       - TZ=Asia/Shanghai          # 设置时区
       - HERMES_HOME=/home/agent/.hermes  # 关键：修改 HOME 目录
+      - HERMES_LAZY_INSTALL_TARGET=/home/agent/.hermes/lazy-packages
       - HERMES_ALLOW_ROOT_GATEWAY=1
 #      - HERMES_MCP_ENABLED=false
 #      - HERMES_UID=${UID:-1000}
@@ -372,6 +394,8 @@ services:
 #      - ${HERMES_CONFIG_DIR:-./config/hermes}/hermes.yaml:/home/agent/.hermes/config.yaml
 #      - ${HERMES_CONFIG_DIR:-./config/hermes}/config.yaml:/home/agent/config.yaml
 
+      # ========== Obsidian 知识库目录 ==========
+      - hermes_obsidian_volume:/knowledge_base/obsidian:rw
       # ========== SSH 私钥挂载（建议只读） ==========
       - ssh_volume:/root/.ssh:ro
       - workspace_volume:/opt/data
@@ -550,6 +574,13 @@ volumes:
     driver_opts:
       type: none
       device: ${PWD}/data/hermes/skills
+      o: bind
+  hermes_obsidian_volume:
+    name: hermes_obsidian_data
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/data/obsidian
       o: bind
   openclaude_volume:
     # 可选配置

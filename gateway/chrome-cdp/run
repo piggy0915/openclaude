@@ -1,0 +1,22 @@
+#!/command/with-contenv sh
+case "${AGENTCHAT_CHROME_CDP:-}" in
+    1|true|TRUE|True|yes|YES|Yes) ;;
+    *) echo "[chrome-cdp] disabled"; exit 0 ;;
+esac
+if [ -z "${DISPLAY:-}" ]; then
+    export DISPLAY=:99
+    pgrep -x Xvfb >/dev/null 2>&1 || (Xvfb :99 -screen 0 1280x800x24 -ac &)
+    sleep 1
+fi
+CHROME="/opt/hermes/.playwright/chromium-1228/chrome-linux64/chrome"
+if [ ! -f "$CHROME" ]; then
+    echo "[chrome-cdp] ERROR: Chrome not found"; exit 1
+fi
+mkdir -p /opt/data/chrome-profile
+exec s6-setuidgid hermes "$CHROME" \
+    --remote-debugging-port=9222 \
+    --remote-debugging-address=127.0.0.1 \
+    --no-sandbox --disable-gpu --disable-dev-shm-usage \
+    --user-data-dir=/opt/data/chrome-profile \
+    --window-size=1280,800 \
+    "https://gemini.google.com/u/0/app"
