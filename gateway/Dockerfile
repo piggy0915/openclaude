@@ -10,7 +10,11 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/home/agent/.hermes/playwright-data
 
 # AgentChat: s6 chrome-cdp 服务
 COPY chrome-cdp/ /opt/hermes/docker/s6-rc.d/chrome-cdp/
-RUN echo "chrome-cdp" >> /opt/hermes/docker/s6-rc.d/user/contents.d/chrome-cdp
+COPY agentchat-framework/ /opt/agentchat/
+RUN echo "chrome-cdp" >> /opt/hermes/docker/s6-rc.d/user/contents.d/chrome-cdp && \
+    ln -s /opt/agentchat/start-chrome.sh /usr/local/bin/agentchat-start && \
+    ln -s /opt/agentchat/scripts/connect-gemini.sh /usr/local/bin/agentchat-connect
+
 # 彻底移除旧 Node.js（包括 /usr/local/bin/ 下的多阶段构建产物）
 RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack && \
     rm -rf /usr/local/lib/node_modules && \

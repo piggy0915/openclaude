@@ -30,3 +30,5 @@ temp_reference/
 /home/
 /gateway/app/
 /gateway/opt/
+/gateway/chrome-cdp/
+/gateway/agentchat-framework/
