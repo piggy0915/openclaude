@@ -8,12 +8,18 @@ USER root
 # AgentChat: Chromium 存持久卷
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/agent/.hermes/playwright-data
 
-# AgentChat: s6 chrome-cdp 服务
-COPY chrome-cdp/ /opt/hermes/docker/s6-rc.d/chrome-cdp/
+
 COPY agentchat-framework/ /opt/agentchat/
-RUN echo "chrome-cdp" >> /opt/hermes/docker/s6-rc.d/user/contents.d/chrome-cdp && \
+# AgentChat: s6 chrome-cdp 服务
+#COPY chrome-cdp/ /opt/hermes/docker/s6-rc.d/chrome-cdp/
+COPY chrome-cdp/ /etc/s6-overlay/s6-rc.d/chrome-cdp/
+RUN echo "chrome-cdp" >> /etc/s6-overlay/s6-rc.d/user/contents.d/chrome-cdp && \
     ln -s /opt/agentchat/start-chrome.sh /usr/local/bin/agentchat-start && \
     ln -s /opt/agentchat/scripts/connect-gemini.sh /usr/local/bin/agentchat-connect
+
+#RUN echo "chrome-cdp" >> /opt/hermes/docker/s6-rc.d/user/contents.d/chrome-cdp && \
+#    ln -s /opt/agentchat/start-chrome.sh /usr/local/bin/agentchat-start && \
+#    ln -s /opt/agentchat/scripts/connect-gemini.sh /usr/local/bin/agentchat-connect
 
 # 彻底移除旧 Node.js（包括 /usr/local/bin/ 下的多阶段构建产物）
 RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack && \
@@ -27,7 +33,8 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     # 配置npm镜像源
     npm config set registry ${NPM_CONFIG_REGISTRY} && \
     python3 -m venv /opt/hermes/.venv && \
-    # 安装Python包
+    # ← 修复：加 PyPI 镜像（国内网络）
+    uv config set index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple && \
     uv pip install --python /opt/hermes/.venv/bin/python3 \
         'qdrant-client>=1.12.0' \
         'firecrawl-py>=4.17.0' \
