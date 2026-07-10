@@ -3,6 +3,290 @@ version: '3.8'
 
 services:
 
+  # ============================================================
+  # Dify - AI 应用开发平台
+  # ============================================================
+
+  # ---------- 支撑组件 ----------
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${DIFY_DB_PASSWORD:-dify123456}
+      POSTGRES_DB: ${DIFY_DB_DATABASE:-dify}
+      POSTGRES_USER: ${DIFY_DB_USERNAME:-postgres}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - rag-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DIFY_DB_USERNAME:-postgres} -d ${DIFY_DB_DATABASE:-dify}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+
+  redis:
+    image: redis:7.4.0-alpine3.20
+    container_name: ruoyi-redis
+    restart: unless-stopped
+    command: "redis-server /redis/config/redis.conf"
+    privileged: true
+    volumes:
+      - ./data/redis/data:/redis/data
+      - ./data/redis/config:/redis/config
+    ports:
+      - "6379:6379"
+    networks:
+      - rag-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 512M
+
+  sandbox:
+    image: langgenius/dify-sandbox:0.2.10
+    container_name: sandbox
+    restart: unless-stopped
+    environment:
+      API_KEY: ${SANDBOX_API_KEY:-dify-sandbox}
+      WORKER_TIMEOUT: 15
+      ENABLE_NETWORK: "true"
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+    volumes:
+      - ./data/sandbox:/dependencies
+    networks:
+      - rag-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  ssrf_proxy:
+    image: langgenius/dify-ssrf-proxy:0.1.0
+    container_name: ssrf_proxy
+    restart: unless-stopped
+    environment:
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+    ports:
+      - "3128:3128"
+    networks:
+      - rag-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 256M
+
+  # ---------- 核心服务 ----------
+  dify-api:
+    image: langgenius/dify-api:1.15.0  # 使用具体版本号
+    container_name: dify-api
+    restart: unless-stopped
+    env_file:
+      - ./config/dify.env  # 新建一个专门存放Dify配置的文件
+    environment:
+      # 核心数据库配置 - 指向你的外部 PostgreSQL
+      DB_USERNAME: ${DIFY_DB_USERNAME}
+      DB_PASSWORD: ${DIFY_DB_PASSWORD}
+      DB_HOST: ${DIFY_DB_HOST}
+      DB_PORT: ${DIFY_DB_PORT}
+      DB_DATABASE: ${DIFY_DB_DATABASE}
+      # Redis 配置 - 建议新增一个独立的 Redis 服务，或复用现有
+      REDIS_HOST: ${DIFY_REDIS_HOST}
+      REDIS_PORT: ${DIFY_REDIS_PORT}
+      REDIS_PASSWORD: ${DIFY_REDIS_PASSWORD}
+      REDIS_DB: ${DIFY_REDIS_DB:-0}
+      # Celery 消息队列
+      CELERY_BROKER_URL: redis://:${DIFY_REDIS_PASSWORD}@${DIFY_REDIS_HOST}:${DIFY_REDIS_PORT}/1
+      # 向量数据库 - 指向你现有的 Qdrant
+      VECTOR_STORE: qdrant
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
+      # Embedding 服务 - 指向你现有的 embedding-llama
+      EMBEDDING_PROVIDER: openai  # 使用 OpenAI 兼容接口
+      OPENAI_API_BASE: http://embedding-llama:8000/v1
+      OPENAI_API_KEY: dummy  # llama.cpp 不需要真实 Key
+      # 沙箱和安全
+      SANDBOX_API_KEY: ${SANDBOX_API_KEY:-dify-sandbox}
+      SSRF_PROXY_HTTP_URL: http://ssrf_proxy:3128
+      SSRF_PROXY_HTTPS_URL: http://ssrf_proxy:3128
+      # Dify 核心配置
+      SECRET_KEY: ${DIFY_SECRET_KEY}
+      CONSOLE_WEB_URL: http://localhost:8082  # 控制台访问地址
+      CONSOLE_API_URL: http://localhost:8082
+      SERVICE_API_URL: http://localhost:8082
+      APP_WEB_URL: http://localhost:8082
+      MODE: api
+      LOG_LEVEL: INFO
+      TZ: Asia/Shanghai
+    ports:
+      - "8082:5001"  # 暴露 API 端口
+    networks:
+      - rag-network
+    depends_on:
+      - qdrant
+      - embedding-llama
+      - postgres
+      - redis
+      - sandbox
+      - ssrf_proxy
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+
+  dify-worker:
+    image: langgenius/dify-api:1.15.0
+    container_name: dify-worker
+    restart: unless-stopped
+    command: /bin/bash /entrypoint.sh worker
+    env_file:
+      - ./config/dify.env
+    environment:
+      # 与 dify-api 保持完全相同的环境变量
+      DB_USERNAME: ${DIFY_DB_USERNAME}
+      DB_PASSWORD: ${DIFY_DB_PASSWORD}
+      DB_HOST: ${DIFY_DB_HOST}
+      DB_PORT: ${DIFY_DB_PORT}
+      DB_DATABASE: ${DIFY_DB_DATABASE}
+      REDIS_HOST: ${DIFY_REDIS_HOST}
+      REDIS_PORT: ${DIFY_REDIS_PORT}
+      REDIS_PASSWORD: ${DIFY_REDIS_PASSWORD}
+      REDIS_DB: ${DIFY_REDIS_DB:-0}
+      CELERY_BROKER_URL: redis://:${DIFY_REDIS_PASSWORD}@${DIFY_REDIS_HOST}:${DIFY_REDIS_PORT}/1
+      VECTOR_STORE: qdrant
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
+      EMBEDDING_PROVIDER: openai
+      OPENAI_API_BASE: http://embedding-llama:8000/v1
+      OPENAI_API_KEY: dummy
+      # 沙箱和安全
+      SANDBOX_API_KEY: ${SANDBOX_API_KEY:-dify-sandbox}
+      SSRF_PROXY_HTTP_URL: http://ssrf_proxy:3128
+      SSRF_PROXY_HTTPS_URL: http://ssrf_proxy:3128
+      SECRET_KEY: ${DIFY_SECRET_KEY}
+      MODE: worker
+      LOG_LEVEL: INFO
+      TZ: Asia/Shanghai
+    networks:
+      - rag-network
+    depends_on:
+      - qdrant
+      - embedding-llama
+      - dify-api
+      - postgres
+      - redis
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+
+  dify-web:
+    image: langgenius/dify-web:1.15.0
+    container_name: dify-web
+    restart: unless-stopped
+    environment:
+      CONSOLE_API_URL: http://dify-api:5001
+      APP_API_URL: http://dify-api:5001
+    ports:
+      - "8083:3000"  # 暴露 Web 界面端口
+    networks:
+      - rag-network
+    depends_on:
+      - dify-api
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+
+  dify-worker_beat:
+    image: langgenius/dify-api:1.15.0
+    container_name: dify-worker_beat
+    restart: unless-stopped
+    command: /bin/bash /entrypoint.sh beat
+    env_file:
+      - ./config/dify.env
+    environment:
+      DB_USERNAME: ${DIFY_DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DIFY_DB_PASSWORD:-dify123456}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: ${DIFY_DB_DATABASE:-dify}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${DIFY_REDIS_PASSWORD:-redis123456}
+      REDIS_USE_SSL: "false"
+      CELERY_BROKER_URL: redis://:${DIFY_REDIS_PASSWORD:-redis123456}@redis:6379/1
+      SECRET_KEY: ${DIFY_SECRET_KEY:-sk-}
+      MODE: beat
+      LOG_LEVEL: INFO
+      TZ: Asia/Shanghai
+    networks:
+      - rag-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 256M
+
+  dify-plugin_daemon:
+    image: langgenius/dify-plugin-daemon:0.1.0-local
+    container_name: dify-plugin_daemon
+    restart: unless-stopped
+    environment:
+      SERVER_PORT: 5002
+      SERVER_HOST: 0.0.0.0
+      DIFY_API_URL: http://dify-api:5001
+      DIFY_API_KEY: ${PLUGIN_DAEMON_KEY:-plugin-daemon-key}
+      PYTHON_ENV_INIT_TIMEOUT: 3600
+      PLUGIN_MAX_PACKAGE_SIZE: 52428800
+      PLUGIN_PACKAGE_CACHE_PATH: /app/storage/cache
+      PLUGIN_REMOTE_INSTALLING_HOST: plugin_daemon
+      PLUGIN_REMOTE_INSTALLING_PORT: 5003
+      TZ: Asia/Shanghai
+    ports:
+      - "5002:5002"
+      - "5003:5003"
+    volumes:
+      - ./data/plugin_daemon:/app/storage
+    networks:
+      - rag-network
+    depends_on:
+      - dify-api
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+
+
   tailscale:
     image: tailscale/tailscale:stable
     hostname: hermes-vm
@@ -294,7 +578,7 @@ services:
       #    因为所有配置都已在 hermes.yaml 中明确定义。
       # 关键：明确启用 API 服务器
       - API_SERVER_ENABLED=true
-      - API_SERVER_PORT=8000
+      - API_SERVER_PORT=8642
       - API_SERVER_HOST=0.0.0.0
       - API_SERVER_KEY=${API_SERVER_KEY:-sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V}
 
@@ -354,7 +638,7 @@ services:
       - rag-network
     healthcheck:
 #      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8642/health"]
       interval: 30s
       timeout: 10s
       retries: 3
