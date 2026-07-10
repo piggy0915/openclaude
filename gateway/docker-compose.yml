@@ -104,22 +104,22 @@ services:
       - ./config/dify.env  # 新建一个专门存放Dify配置的文件
     environment:
       # 核心数据库配置 - 指向你的外部 PostgreSQL
-      DB_USERNAME: ${DIFY_DB_USERNAME}
-      DB_PASSWORD: ${DIFY_DB_PASSWORD}
-      DB_HOST: ${DIFY_DB_HOST}
-      DB_PORT: ${DIFY_DB_PORT}
-      DB_DATABASE: ${DIFY_DB_DATABASE}
+      DB_USERNAME: ${DIFY_DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DIFY_DB_PASSWORD:-dify123456}
+      DB_HOST: ${DIFY_DB_HOST:-postgres}
+      DB_PORT: ${DIFY_DB_PORT:-5432}
+      DB_DATABASE: ${DIFY_DB_DATABASE:-dify}
       # Redis 配置 - 建议新增一个独立的 Redis 服务，或复用现有
-      REDIS_HOST: ${DIFY_REDIS_HOST}
-      REDIS_PORT: ${DIFY_REDIS_PORT}
-      REDIS_PASSWORD: ${DIFY_REDIS_PASSWORD}
+      REDIS_HOST: ${DIFY_REDIS_HOST:-redis}
+      REDIS_PORT: ${DIFY_REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${DIFY_REDIS_PASSWORD:-dify123456}
       REDIS_DB: ${DIFY_REDIS_DB:-0}
       # Celery 消息队列
       CELERY_BROKER_URL: redis://:${DIFY_REDIS_PASSWORD}@${DIFY_REDIS_HOST}:${DIFY_REDIS_PORT}/1
       # 向量数据库 - 指向你现有的 Qdrant
       VECTOR_STORE: qdrant
       QDRANT_URL: http://qdrant:6333
-      QDRANT_API_KEY: ${QDRANT_API_KEY}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-dify123456}
       # Embedding 服务 - 指向你现有的 embedding-llama
       EMBEDDING_PROVIDER: openai  # 使用 OpenAI 兼容接口
       OPENAI_API_BASE: http://embedding-llama:8000/v1
@@ -129,7 +129,7 @@ services:
       SSRF_PROXY_HTTP_URL: http://ssrf_proxy:3128
       SSRF_PROXY_HTTPS_URL: http://ssrf_proxy:3128
       # Dify 核心配置
-      SECRET_KEY: ${DIFY_SECRET_KEY}
+      SECRET_KEY: ${DIFY_SECRET_KEY:-dify123456}
       CONSOLE_WEB_URL: http://localhost:8082  # 控制台访问地址
       CONSOLE_API_URL: http://localhost:8082
       SERVICE_API_URL: http://localhost:8082
@@ -163,19 +163,19 @@ services:
       - ./config/dify.env
     environment:
       # 与 dify-api 保持完全相同的环境变量
-      DB_USERNAME: ${DIFY_DB_USERNAME}
-      DB_PASSWORD: ${DIFY_DB_PASSWORD}
-      DB_HOST: ${DIFY_DB_HOST}
-      DB_PORT: ${DIFY_DB_PORT}
-      DB_DATABASE: ${DIFY_DB_DATABASE}
-      REDIS_HOST: ${DIFY_REDIS_HOST}
-      REDIS_PORT: ${DIFY_REDIS_PORT}
-      REDIS_PASSWORD: ${DIFY_REDIS_PASSWORD}
+      DB_USERNAME: ${DIFY_DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DIFY_DB_PASSWORD:-dify123456}
+      DB_HOST: ${DIFY_DB_HOST:-postgres}
+      DB_PORT: ${DIFY_DB_PORT:-5432}
+      DB_DATABASE: ${DIFY_DB_DATABASE:-dify}
+      REDIS_HOST: ${DIFY_REDIS_HOST:-redis}
+      REDIS_PORT: ${DIFY_REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${DIFY_REDIS_PASSWORD:-dify123456}
       REDIS_DB: ${DIFY_REDIS_DB:-0}
-      CELERY_BROKER_URL: redis://:${DIFY_REDIS_PASSWORD}@${DIFY_REDIS_HOST}:${DIFY_REDIS_PORT}/1
+      CELERY_BROKER_URL: redis://:${DIFY_REDIS_PASSWORD:-dify123456}@${DIFY_REDIS_HOST:-redis}:${DIFY_REDIS_PORT:-6379}/1
       VECTOR_STORE: qdrant
       QDRANT_URL: http://qdrant:6333
-      QDRANT_API_KEY: ${QDRANT_API_KEY}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-dify123456}
       EMBEDDING_PROVIDER: openai
       OPENAI_API_BASE: http://embedding-llama:8000/v1
       OPENAI_API_KEY: dummy
@@ -183,7 +183,7 @@ services:
       SANDBOX_API_KEY: ${SANDBOX_API_KEY:-dify-sandbox}
       SSRF_PROXY_HTTP_URL: http://ssrf_proxy:3128
       SSRF_PROXY_HTTPS_URL: http://ssrf_proxy:3128
-      SECRET_KEY: ${DIFY_SECRET_KEY}
+      SECRET_KEY: ${DIFY_SECRET_KEY:-dify123456}
       MODE: worker
       LOG_LEVEL: INFO
       TZ: Asia/Shanghai
