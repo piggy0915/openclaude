@@ -59,7 +59,7 @@ services:
           memory: 512M
 
   sandbox:
-    image: langgenius/dify-sandbox:0.2.10
+    image: langgenius/dify-sandbox:0.2.15
     container_name: sandbox
     restart: unless-stopped
     environment:
@@ -115,7 +115,7 @@ services:
       REDIS_PASSWORD: ${DIFY_REDIS_PASSWORD:-dify123456}
       REDIS_DB: ${DIFY_REDIS_DB:-0}
       # Celery 消息队列
-      CELERY_BROKER_URL: redis://:${DIFY_REDIS_PASSWORD}@${DIFY_REDIS_HOST}:${DIFY_REDIS_PORT}/1
+      CELERY_BROKER_URL: redis://:${DIFY_REDIS_PASSWORD:-dify123456}@${DIFY_REDIS_HOST:-redis}:${DIFY_REDIS_PORT:-6379}/1
       # 向量数据库 - 指向你现有的 Qdrant
       VECTOR_STORE: qdrant
       QDRANT_URL: http://qdrant:6333
@@ -658,7 +658,7 @@ services:
         max-file: "3"
 
   hermes-webui:
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.25}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.28}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
 #    user: "${UID:-1000}:${GID:-1000}"
     ports:
