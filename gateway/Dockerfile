@@ -38,7 +38,7 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     uv pip install --python /opt/hermes/.venv/bin/python3 \
         'qdrant-client>=1.12.0' \
         'firecrawl-py>=4.17.0' \
-        'lark-oapi==1.5.3' \
+        'lark-oapi==1.6.8' \
         'qrcode==7.4.2' \
         'dingtalk-stream==0.24.3' \
         'alibabacloud-dingtalk==2.2.42' \
@@ -46,6 +46,7 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
         && \
     # 升级npm到最新版本
     npm install -g npm@latest && \
+    npm install -g @gitlawb/openclaude@latest reasonix@latest && \
     npm cache clean --force && \
     # 恢复默认 prefix
     npm config delete prefix && \
@@ -53,6 +54,8 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     ln -sf /usr/bin/node /usr/local/bin/node && \
     ln -sf /usr/bin/npm /usr/local/bin/npm && \
     ln -sf /usr/bin/npx /usr/local/bin/npx && \
+    ln -sf /usr/lib/node_modules/.bin/openclaude /usr/local/bin/openclaude && \
+    ln -sf /usr/lib/node_modules/.bin/reasonix /usr/local/bin/reasonix && \
     # 下载完整版 Chromium 到持久卷（支持 CDP）
     mkdir -p /home/agent/.hermes/playwright-data && \
     /opt/hermes/.venv/bin/python3 -m playwright install chromium && \
