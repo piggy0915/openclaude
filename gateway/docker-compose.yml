@@ -83,8 +83,8 @@ services:
     container_name: ssrf_proxy
     restart: unless-stopped
     volumes:
-      - .data/ssrf_proxy/squid.conf.template:/etc/squid/squid.conf.template
-      - .data/ssrf_proxy/docker-entrypoint.sh:/docker-entrypoint-mount.sh
+      - ./data/ssrf_proxy/squid.conf.template:/etc/squid/squid.conf.template
+      - ./data/ssrf_proxy/docker-entrypoint.sh:/docker-entrypoint-mount.sh
     environment:
       HTTP_PORT: ${SSRF_HTTP_PORT:-3128}
       COREDUMP_DIR: ${SSRF_COREDUMP_DIR:-/var/spool/squid}
@@ -560,7 +560,7 @@ services:
       # ========== Obsidian 知识库目录 ==========
 #      - ./data/obsidian/knowledge:/knowledge_base/obsidian:rw
 
-      - workspace_volume:/opt/data
+      - workspace_volume:/opt/data/workspace
       - app_volume:/app:ro
       - openclaude_volume:/root/.openclaude
       - ./config/.env:/home/agent/.env
@@ -693,7 +693,7 @@ services:
       - hermes_obsidian_volume:/knowledge_base/obsidian:rw
       # ========== SSH 私钥挂载（建议只读） ==========
       - ssh_volume:/root/.ssh:ro
-      - workspace_volume:/opt/data
+      - workspace_volume:/opt/data/workspace
       - app_volume:/app:ro
 
     environment:
