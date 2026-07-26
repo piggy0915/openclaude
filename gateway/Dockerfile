@@ -27,6 +27,12 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     apt-get remove -y nodejs npm || true && \
     apt-get autoremove -y || true && \
     apt-get update && \
+    # 安装 SQLite 编译依赖和其他必要工具
+    apt-get install -y \
+        build-essential \
+        curl \
+        wget \
+        && \
     # 使用 NodeSource 安装 Node.js 24(不要再用 curl 下载二进制)
     curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - && \
     apt-get install -y nodejs python3-pip && \
@@ -36,6 +42,7 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     # ← 修复：加 PyPI 镜像（国内网络）
 #    uv config set index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple && \
     uv pip install --python /opt/hermes/.venv/bin/python3 \
+        -e /opt/hermes \
         'qdrant-client>=1.12.0' \
         'firecrawl-py>=4.17.0' \
         'lark-oapi==1.6.8' \
@@ -61,6 +68,43 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     /opt/hermes/.venv/bin/python3 -m playwright install chromium && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# SQLite 升级 - 增加错误处理和详细日志
+COPY sqlite-autoconf-3510300.tar.gz /tmp/
+RUN set -eu; \
+    echo "📦 Starting SQLite compilation..."; \
+    # 验证文件存在
+    if [ ! -f /tmp/sqlite-autoconf-3510300.tar.gz ]; then \
+        echo "❌ SQLite tarball not found!"; \
+        exit 1; \
+    fi; \
+    tar xzf /tmp/sqlite-autoconf-3510300.tar.gz -C /tmp; \
+    cd /tmp/sqlite-autoconf-3510300; \
+    echo "📋 Running configure..."; \
+    ./configure --prefix=/usr/local --all; \
+    echo "🔨 Compiling SQLite (this may take a few minutes)..."; \
+    # 先尝试单线程编译（更稳定）
+    make -j$(nproc); \
+    echo "📦 Installing SQLite..."; \
+    make install; \
+    ldconfig; \
+    echo "✅ SQLite installed, verifying..."; \
+    # 验证系统级 SQLite
+    sqlite3 --version; \
+    # 验证 Python 中的 SQLite 版本
+    /opt/hermes/.venv/bin/python3 -c \
+        "import sqlite3; v=sqlite3.sqlite_version; print(f'✅ SQLite upgraded: {v}'); assert v>='3.51.3'"; \
+    echo "🧹 Cleaning up..."; \
+    rm -rf /tmp/sqlite-autoconf-*
+# CJK 分词扩展（必须在 SQLite 升级之后，用新 headers 编译）
+RUN mkdir -p /home/agent/.hermes/lib && \
+    cd /opt/hermes/native/fts5_cjk && \
+    gcc -shared -fPIC -O2 -Wall -I/usr/local/include fts5_cjk.c -o libfts5_cjk.so && \
+    install -m 0644 libfts5_cjk.so /home/agent/.hermes/lib/libfts5_cjk.so
+
+# 可选：如果上述方法仍然失败，使用这个备用方案
+# RUN apt-get update && apt-get install -y sqlite3 libsqlite3-dev && \
+#     sqlite3 --version
 
 #ENTRYPOINT ["/opt/hermes/docker/entrypoint.sh"]
 CMD ["gateway", "run"]
