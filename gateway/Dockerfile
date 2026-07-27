@@ -43,13 +43,13 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
 #    uv config set index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple && \
     uv pip install --python /opt/hermes/.venv/bin/python3 \
         -e /opt/hermes \
-        'qdrant-client>=1.12.0' \
-        'firecrawl-py>=4.17.0' \
-        'lark-oapi==1.6.8' \
-        'qrcode==7.4.2' \
+        'qdrant-client>=1.18.0' \
+        'firecrawl-py>=4.28.2' \
+        'lark-oapi==1.7.1' \
+        'qrcode==8.2' \
         'dingtalk-stream==0.24.3' \
-        'alibabacloud-dingtalk==2.2.42' \
-        'playwright>=1.45' \
+        'alibabacloud-dingtalk==2.2.49' \
+        'playwright>=1.62.0' \
         && \
     # 升级npm到最新版本
     npm install -g npm@latest && \
