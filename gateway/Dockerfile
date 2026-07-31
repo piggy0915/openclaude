@@ -8,6 +8,17 @@ USER root
 # AgentChat: Chromium 存持久卷
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/agent/.hermes/playwright-data
 
+# 使用国内镜像源（如果在国内）
+# 使用国内镜像源（如果在国内）- 修复：先检查文件是否存在
+RUN if [ -f /etc/apt/sources.list ]; then \
+        sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+        sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list; \
+    elif [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
+        sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources; \
+    else \
+        echo "⚠️ No sources.list found, skipping mirror configuration"; \
+    fi
 
 COPY agentchat-framework/ /opt/agentchat/
 # AgentChat: s6 chrome-cdp 服务
@@ -49,7 +60,7 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
         'qrcode==8.2' \
         'dingtalk-stream==0.24.3' \
         'alibabacloud-dingtalk==2.2.49' \
-        'playwright>=1.62.0' \
+        'playwright>=1.61.0' \
         && \
     # 升级npm到最新版本
     npm install -g npm@latest && \
