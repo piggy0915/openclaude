@@ -564,6 +564,7 @@ services:
       - app_volume:/app:ro
       - openclaude_volume:/root/.openclaude
       - ./config/.env:/home/agent/.env
+      - ./config/config.yaml:/home/agent/config.yaml
       - ./config/openclaude/.openclaude.json:/root/.openclaude.json:rw
       - ./config/openclaude/settings.json:/root/.openclaude/settings.json:rw
 

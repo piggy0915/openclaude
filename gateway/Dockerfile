@@ -51,7 +51,6 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     npm config set registry ${NPM_CONFIG_REGISTRY} && \
     python3 -m venv /opt/hermes/.venv && \
     # ← 修复：加 PyPI 镜像（国内网络）
-#    uv config set index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple && \
     uv pip install --python /opt/hermes/.venv/bin/python3 \
         -e /opt/hermes \
         'qdrant-client>=1.18.0' \
