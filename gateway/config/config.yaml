@@ -1,4 +1,6 @@
-model: {}
+model:
+  default: hy3
+  provider: tencent-tokenhub
 providers: {}
 fallback_providers: []
 credential_pool_strategies: {}
@@ -601,6 +603,24 @@ gateway:
   trust_recent_files_seconds: 600
   api_server:
     max_concurrent_runs: 10
+    extra:
+      model_routes:
+        deepseek-v4-flash:
+          model: deepseek-v4-flash
+          provider: deepseek
+        deepseek-chat:
+          model: deepseek-chat
+          provider: deepseek
+        deepseek-reasoner:
+          model: deepseek-reasoner
+          provider: deepseek
+        hy3:
+          model: hy3
+          provider: tencent-tokenhub
+        hy3-preview:
+          model: hy3-preview
+          provider: tencent-tokenhub
+      direct_model_requests: true
 streaming:
   enabled: false
   transport: auto

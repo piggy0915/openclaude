@@ -43,6 +43,7 @@ services:
     volumes:
       - ./data/redis/data:/redis/data
       - ./data/redis/config:/redis/config
+      - ./data/redis/data:/data   # 覆盖镜像 VOLUME /data
     ports:
       - "6379:6379"
     networks:
@@ -85,6 +86,8 @@ services:
     volumes:
       - ./data/ssrf_proxy/squid.conf.template:/etc/squid/squid.conf.template
       - ./data/ssrf_proxy/docker-entrypoint.sh:/docker-entrypoint-mount.sh
+      - ./data/ssrf_proxy/log:/var/log/squid     # 覆盖镜像 VOLUME /var/log/squid
+      - ./data/ssrf_proxy/spool:/var/spool/squid # 覆盖镜像 VOLUME /var/spool/squid
     environment:
       HTTP_PORT: ${SSRF_HTTP_PORT:-3128}
       COREDUMP_DIR: ${SSRF_COREDUMP_DIR:-/var/spool/squid}
@@ -467,6 +470,7 @@ services:
       - "4000:4000"        # Web 管理界面（可选，调试用）
     volumes:
       - ./data/searxng:/etc/searxng:rw          # 配置文件
+      - ./data/searxng/cache:/var/cache/searxng # 覆盖镜像 VOLUME /var/cache/searxng
     environment:
       - SEARXNG_PORT=4000           # 强制设置容器内端口
       - SEARXNG_BIND_ADDRESS=0.0.0.0
