@@ -79,7 +79,7 @@ services:
           memory: 512M
 
   ssrf_proxy:
-    image: ubuntu/squid:7.2-26.04_edge
+    image: ubuntu/squid:latest
     container_name: ssrf_proxy
     restart: unless-stopped
     volumes:
@@ -112,7 +112,7 @@ services:
     container_name: dify-api
     restart: unless-stopped
     env_file:
-      - ./config/dify.env  # 新建一个专门存放Dify配置的文件
+      - ./.env
     environment:
       # 核心数据库配置 - 指向你的外部 PostgreSQL
       DB_USERNAME: ${DIFY_DB_USERNAME:-postgres}
@@ -171,7 +171,7 @@ services:
     restart: unless-stopped
     command: /bin/bash /entrypoint.sh worker
     env_file:
-      - ./config/dify.env
+      - ./.env
     environment:
       # 与 dify-api 保持完全相同的环境变量
       DB_USERNAME: ${DIFY_DB_USERNAME:-postgres}
@@ -238,7 +238,7 @@ services:
     restart: unless-stopped
     command: /bin/bash /entrypoint.sh beat
     env_file:
-      - ./config/dify.env
+      - ./.env
     environment:
       DB_USERNAME: ${DIFY_DB_USERNAME:-postgres}
       DB_PASSWORD: ${DIFY_DB_PASSWORD:-dify123456}
@@ -271,9 +271,19 @@ services:
     image: langgenius/dify-plugin-daemon:0.6.3-local
     container_name: dify-plugin_daemon
     restart: unless-stopped
+    env_file:
+      - ./.env
     environment:
       SERVER_PORT: 5002
       SERVER_HOST: 0.0.0.0
+      DB_HOST: ${DIFY_DB_HOST:-postgres}
+      DB_PORT: ${DIFY_DB_PORT:-5432}
+      DB_USERNAME: ${DIFY_DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DIFY_DB_PASSWORD:-dify123456}
+      DB_DATABASE: ${DIFY_DB_DATABASE:-dify}
+      SERVER_KEY: ${PLUGIN_DAEMON_KEY:-plugin-daemon-key}
+      DIFY_INNER_API_URL: http://dify-api:5001
+      DIFY_INNER_API_KEY: ${PLUGIN_DAEMON_KEY:-plugin-daemon-key}
       DIFY_API_URL: http://dify-api:5001
       DIFY_API_KEY: ${PLUGIN_DAEMON_KEY:-plugin-daemon-key}
       PYTHON_ENV_INIT_TIMEOUT: 3600
@@ -298,20 +308,20 @@ services:
           memory: 1G
 
 
-  tailscale:
-    image: tailscale/tailscale:stable
-    hostname: hermes-vm
-    container_name: tailscale
-    restart: unless-stopped
-    environment:
-      - TS_AUTHKEY=   # 可选：预认证密钥，免手动跳转登录
-    volumes:
-      - ./opt/tailscale/data:/var/lib/tailscale   # 持久化状态，重启后IP不变
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
-      - SYS_MODULE
-    network_mode: host   # 关键：直接走宿主机网络，所有容器服务都可达
+#  tailscale:
+#    image: tailscale/tailscale:stable
+#    hostname: hermes-vm
+#    container_name: tailscale
+#    restart: unless-stopped
+#    environment:
+#      - TS_AUTHKEY=   # 可选：预认证密钥，免手动跳转登录
+#    volumes:
+#      - ./opt/tailscale/data:/var/lib/tailscale   # 持久化状态，重启后IP不变
+#      - /dev/net/tun:/dev/net/tun
+#    cap_add:
+#      - NET_ADMIN
+#      - SYS_MODULE
+#    network_mode: host   # 关键：直接走宿主机网络，所有容器服务都可达
 
   # ============================================================
   # Coze 适配器 - 将 Coze 请求转换为 Hermes API
@@ -561,6 +571,7 @@ services:
 #      - ./data/obsidian/knowledge:/knowledge_base/obsidian:rw
 
       - workspace_volume:/opt/data/workspace
+      - opt_data_volume:/opt/data:rw
       - app_volume:/app:ro
       - openclaude_volume:/root/.openclaude
       - ./config/.env:/home/agent/.env
@@ -670,7 +681,7 @@ services:
         max-file: "3"
 
   hermes-webui:
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.35}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.36}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
 #    user: "${UID:-1000}:${GID:-1000}"
     ports:
@@ -695,6 +706,7 @@ services:
       # ========== SSH 私钥挂载（建议只读） ==========
       - ssh_volume:/root/.ssh:ro
       - workspace_volume:/opt/data/workspace
+      - opt_data_volume:/opt/data:rw
       - app_volume:/app:ro
 
     environment:
@@ -826,6 +838,13 @@ services:
 
 
 volumes:
+  opt_data_volume:
+    name: opt_data
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/data/opt-data
+      o: bind
   hermes_node_modules_volume:
     # 可选配置
     name: hermes_node_modules  # 指定卷名称（不指定则自动生成）
