@@ -94,6 +94,12 @@ RUN cd /opt/agentchat && \
     done && \
     ln -sfn /home/agent/.hermes/skills /home/agent/.claude/skills
 
+# Serena (MCP IDE toolkit for coding agents) - 装进 Hermes venv + 初始化
+RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
+        --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+        serena-agent mcp && \
+    HOME=/home/agent /opt/hermes/.venv/bin/serena init
+
 # SQLite 升级 - 增加错误处理和详细日志
 COPY sqlite-autoconf-3510300.tar.gz /tmp/
 RUN set -eu; \

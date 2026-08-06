@@ -1,6 +1,4 @@
-model:
-  default: hy3
-  provider: tencent-tokenhub
+model: {}
 providers: {}
 fallback_providers: []
 credential_pool_strategies: {}
@@ -698,6 +696,14 @@ mcp_servers:
       HERMES_MCP_TOOLSET: api
       HERMES_WEB_UI_MANAGED_MCP: "1"
     enabled: true
+  serena:
+    command: /opt/hermes/.venv/bin/serena
+    args:
+      - start-mcp-server
+    env:
+      HOME: /home/agent
+    enabled: true
+
   hermes-studio-devices:
     command: /usr/local/bin/node
     args:
