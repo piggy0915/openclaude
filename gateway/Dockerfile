@@ -94,11 +94,16 @@ RUN cd /opt/agentchat && \
     done && \
     ln -sfn /home/agent/.hermes/skills /home/agent/.claude/skills
 
-# Serena (MCP IDE toolkit for coding agents) - 装进 Hermes venv + 初始化
+# Serena (MCP IDE toolkit for coding agents) - 独立 venv 隔离安装（避免与 hermes 依赖 pin 冲突）
+RUN python3 -m venv /opt/serena-venv && \
+    /opt/serena-venv/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
+        'serena-agent==1.6.1' && \
+    HOME=/home/agent /opt/serena-venv/bin/serena init
+
+# Hermes 原生 MCP 客户端依赖（mcp_servers 功能必需）
 RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
         --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-        serena-agent mcp && \
-    HOME=/home/agent /opt/hermes/.venv/bin/serena init
+        mcp
 
 # CodeGraph (预索引语义代码知识图谱 MCP) - npm 全局 + PATH 链接
 RUN npm i -g @colbymchenry/codegraph && \
