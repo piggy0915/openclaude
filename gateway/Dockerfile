@@ -100,6 +100,10 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
         serena-agent mcp && \
     HOME=/home/agent /opt/hermes/.venv/bin/serena init
 
+# CodeGraph (预索引语义代码知识图谱 MCP) - npm 全局 + PATH 链接
+RUN npm i -g @colbymchenry/codegraph && \
+    ln -sf "$(npm prefix -g)/bin/codegraph" /usr/local/bin/codegraph
+
 # SQLite 升级 - 增加错误处理和详细日志
 COPY sqlite-autoconf-3510300.tar.gz /tmp/
 RUN set -eu; \

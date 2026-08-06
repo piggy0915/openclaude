@@ -696,6 +696,15 @@ mcp_servers:
       HERMES_MCP_TOOLSET: api
       HERMES_WEB_UI_MANAGED_MCP: "1"
     enabled: true
+  codegraph:
+    command: /usr/local/bin/codegraph
+    args:
+      - serve
+      - --mcp
+    timeout: 120
+    connect_timeout: 60
+    enabled: true
+
   serena:
     command: /opt/hermes/.venv/bin/serena
     args:
@@ -767,6 +776,7 @@ platform_toolsets:
     - video
     - vision
     - web
+    - mcp-codegraph
 known_plugin_toolsets:
   cli:
     - spotify
