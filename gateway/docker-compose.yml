@@ -601,6 +601,7 @@ services:
 
     environment:
       - TZ=Asia/Shanghai          # 设置时区
+      - AGENTCHAT_CHROME_CDP=1      # 启用 s6 chrome-cdp（AgentChat CDP 9222）
       - HERMES_HOME=/home/agent/.hermes  # 关键：修改 HOME 目录
       - HERMES_LAZY_INSTALL_TARGET=/home/agent/.hermes/lazy-packages
       - HERMES_ALLOW_ROOT_GATEWAY=1

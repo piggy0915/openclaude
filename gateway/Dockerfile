@@ -25,8 +25,9 @@ COPY agentchat-framework/ /opt/agentchat/
 #COPY chrome-cdp/ /opt/hermes/docker/s6-rc.d/chrome-cdp/
 COPY chrome-cdp/ /etc/s6-overlay/s6-rc.d/chrome-cdp/
 RUN echo "chrome-cdp" >> /etc/s6-overlay/s6-rc.d/user/contents.d/chrome-cdp && \
-    ln -s /opt/agentchat/start-chrome.sh /usr/local/bin/agentchat-start && \
-    ln -s /opt/agentchat/scripts/connect-gemini.sh /usr/local/bin/agentchat-connect
+    ln -sf /opt/agentchat/scripts/start-chrome-debug.sh /usr/local/bin/agentchat-start && \
+    ln -sf /opt/agentchat/scripts/connect-gemini.sh /usr/local/bin/agentchat-connect && \
+    ln -sf /opt/agentchat/skills/AgentChat-OneWeb/index.js /usr/local/bin/agentchat-oneweb
 
 #RUN echo "chrome-cdp" >> /opt/hermes/docker/s6-rc.d/user/contents.d/chrome-cdp && \
 #    ln -s /opt/agentchat/start-chrome.sh /usr/local/bin/agentchat-start && \
@@ -74,11 +75,24 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     ln -sf /usr/bin/npx /usr/local/bin/npx && \
     ln -sf /usr/lib/node_modules/.bin/openclaude /usr/local/bin/openclaude && \
     ln -sf /usr/lib/node_modules/.bin/reasonix /usr/local/bin/reasonix && \
-    # 下载完整版 Chromium 到持久卷（支持 CDP）
+    # 下载完整版 Chromium 到持久卷（支持 CDP）- npmmirror 加速 + 显式路径 + 构建期验证
     mkdir -p /home/agent/.hermes/playwright-data && \
+    PLAYWRIGHT_BROWSERS_PATH=/home/agent/.hermes/playwright-data \
+    PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright \
     /opt/hermes/.venv/bin/python3 -m playwright install chromium && \
+    ls -d /home/agent/.hermes/playwright-data/chromium-*/chrome-linux64/chrome >/dev/null || { echo "FAIL: Chromium missing in persistent volume"; exit 1; } && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# AgentChat (Node.js v2) - npm 依赖 + Hermes skill 挂载
+RUN cd /opt/agentchat && \
+    npm install --no-audit --no-fund && \
+    (cd skills/AgentChat-OneWeb && npm install --no-audit --no-fund) && \
+    mkdir -p /home/agent/.hermes/skills /home/agent/.claude && \
+    for s in AgentChat-OneWeb AgentChat-IndependentTasks AgentChat-WebSubAgent; do \
+        ln -sfn /opt/agentchat/skills/$s /home/agent/.hermes/skills/$s; \
+    done && \
+    ln -sfn /home/agent/.hermes/skills /home/agent/.claude/skills
 
 # SQLite 升级 - 增加错误处理和详细日志
 COPY sqlite-autoconf-3510300.tar.gz /tmp/
