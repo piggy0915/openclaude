@@ -62,13 +62,20 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
         'dingtalk-stream==0.24.3' \
         'alibabacloud-dingtalk==2.2.49' \
         'playwright>=1.61.0' \
+        'websocket-client>=1.8.0' \
         && \
-    # 升级npm到最新版本
+    # npm 自愈：NodeSource npm 缺失时 fallback apt（Debian npm 9 由下方 npm@latest 升级）
+    npm --version || apt-get install -y npm && \
+    # 固定全局 prefix=/usr（与基础镜像 /usr/lib/node_modules 一致，避免 /usr 与 /usr/local 分裂）
+    npm config set prefix /usr && \
+    # 升级npm到最新版本（带验证，防静默失败产出残缺镜像）
     npm install -g npm@latest && \
+    npm --version && \
+    # 安装编码工具并逐一验证
     npm install -g @gitlawb/openclaude@latest reasonix@latest && \
+    openclaude --version && \
+    reasonix --version && \
     npm cache clean --force && \
-    # 恢复默认 prefix
-    npm config delete prefix && \
     node --version && \
     ln -sf /usr/bin/node /usr/local/bin/node && \
     ln -sf /usr/bin/npm /usr/local/bin/npm && \
@@ -88,6 +95,7 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
 RUN cd /opt/agentchat && \
     npm install --no-audit --no-fund && \
     (cd skills/AgentChat-OneWeb && npm install --no-audit --no-fund) && \
+    test -d /opt/agentchat/node_modules && test -d /opt/agentchat/skills/AgentChat-OneWeb/node_modules || { echo "FAIL: agentchat npm deps"; exit 1; } && \
     mkdir -p /home/agent/.hermes/skills /home/agent/.claude && \
     for s in AgentChat-OneWeb AgentChat-IndependentTasks AgentChat-WebSubAgent; do \
         ln -sfn /opt/agentchat/skills/$s /home/agent/.hermes/skills/$s; \
@@ -105,9 +113,18 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
         --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
         mcp
 
-# CodeGraph (预索引语义代码知识图谱 MCP) - npm 全局 + PATH 链接
+# CodeGraph (预索引语义代码知识图谱 MCP) - npm 全局 + PATH 链接 + 构建期验证
+# 注意：npm i -g 会自动建 bin 链接，此处仅兜底 + 强制验证，失败即构建失败
 RUN npm i -g @colbymchenry/codegraph && \
-    ln -sf "$(npm prefix -g)/bin/codegraph" /usr/local/bin/codegraph
+    ln -sf "$(npm root -g)/@colbymchenry/codegraph/npm-shim.js" /usr/local/bin/codegraph && \
+    codegraph --version && \
+    test -x /usr/local/bin/codegraph || { echo "FAIL"; exit 1; }
+
+RUN npm install -g ppt-mcp@2.0.0 @upstash/context7-mcp@3.2.2 @drawio/mcp@1.3.2 && \
+    test -f /usr/lib/node_modules/ppt-mcp/build/index.js && \
+    test -f /usr/lib/node_modules/@upstash/context7-mcp/dist/index.js && \
+    test -f /usr/lib/node_modules/@drawio/mcp/src/index.js && \
+    echo "OK: MCP packages installed" || { echo "FAIL"; exit 1; }
 
 # SQLite 升级 - 增加错误处理和详细日志
 COPY sqlite-autoconf-3510300.tar.gz /tmp/

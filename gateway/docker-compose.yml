@@ -578,7 +578,7 @@ services:
     env_file:
       - ./config/.env
     volumes:
-      - hermes_node_modules_volume:/usr/lib/node_modules
+#      - hermes_node_modules_volume:/usr/lib/node_modules
       - hermes_data_volume:/home/agent/.hermes
       - hermes_scripts_volume:/home/agent/scripts
       - hermes_webui_data_volume:/home/agent/.hermes-web-ui
@@ -712,7 +712,7 @@ services:
     env_file:
       - ./config/.env
     volumes:
-      - hermes_node_modules_volume:/usr/lib/node_modules
+#      - hermes_node_modules_volume:/usr/lib/node_modules
       - hermes_data_volume:/home/agent/.hermes
       - hermes_webui_data_volume:/home/agent/.hermes-web-ui
 
@@ -866,14 +866,14 @@ volumes:
       type: none
       device: ${PWD}/data/opt-data
       o: bind
-  hermes_node_modules_volume:
-    # 可选配置
-    name: hermes_node_modules  # 指定卷名称（不指定则自动生成）
-    driver: local  # 默认就是 local
-    driver_opts:   # 高级选项
-      type: none
-      device: ${PWD}/data/node_modules
-      o: bind
+#  hermes_node_modules_volume:
+#    # 可选配置
+#    name: hermes_node_modules  # 指定卷名称（不指定则自动生成）
+#    driver: local  # 默认就是 local
+#    driver_opts:   # 高级选项
+#      type: none
+#      device: ${PWD}/data/node_modules
+#      o: bind
   hermes_data_volume:
     # 可选配置
     name: hermes_data  # 指定卷名称（不指定则自动生成）
