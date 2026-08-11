@@ -7,6 +7,7 @@ USER root
 
 # AgentChat: Chromium 存持久卷
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/agent/.hermes/playwright-data
+ENV CRAWL4AI_PLAYWRIGHT_BROWSERS_PATH=/home/agent/.hermes/playwright-data
 
 # 使用国内镜像源（如果在国内）
 # 使用国内镜像源（如果在国内）- 修复：先检查文件是否存在
@@ -57,6 +58,8 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
         -e /opt/hermes \
         'qdrant-client>=1.18.0' \
         'firecrawl-py>=4.28.2' \
+        'firecrawl-anydoc' \
+        'crawl4ai' \
         'lark-oapi==1.6.8' \
         'qrcode==7.4.2' \
         'dingtalk-stream==0.24.3' \
@@ -72,7 +75,7 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     npm install -g npm@latest && \
     npm --version && \
     # 安装编码工具并逐一验证
-    npm install -g @gitlawb/openclaude@latest reasonix@latest && \
+    npm install -g @gitlawb/openclaude@latest reasonix@latest @firecrawl/anydoc && \
     openclaude --version && \
     reasonix --version && \
     npm cache clean --force && \
@@ -88,6 +91,10 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright \
     /opt/hermes/.venv/bin/python3 -m playwright install chromium && \
     ls -d /home/agent/.hermes/playwright-data/chromium-*/chrome-linux64/chrome >/dev/null || { echo "FAIL: Chromium missing in persistent volume"; exit 1; } && \
+    # ← 新增：crawl4ai 初始化
+    PLAYWRIGHT_BROWSERS_PATH=/home/agent/.hermes/playwright-data \
+    CRAWL4AI_PLAYWRIGHT_BROWSERS_PATH=/home/agent/.hermes/playwright-data \
+    /opt/hermes/.venv/bin/python3 -m crawl4ai_setup && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
