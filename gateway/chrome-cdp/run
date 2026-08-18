@@ -8,15 +8,20 @@ if [ -z "${DISPLAY:-}" ]; then
     pgrep -x Xvfb >/dev/null 2>&1 || (Xvfb :99 -screen 0 1280x800x24 -ac &)
     sleep 1
 fi
-CHROME="/opt/hermes/.playwright/chromium-1228/chrome-linux64/chrome"
-if [ ! -f "$CHROME" ]; then
-    echo "[chrome-cdp] ERROR: Chrome not found"; exit 1
+CHROME="$(ls -d /opt/hermes/.playwright/chromium-*/chrome-linux64/chrome 2>/dev/null | head -1)"
+[ -n "$CHROME" ] || CHROME="$(ls -d /home/agent/.hermes/playwright-data/chromium-*/chrome-linux64/chrome 2>/dev/null | head -1)"
+if [ -z "$CHROME" ]; then
+    echo "[chrome-cdp] ERROR: Chrome not found (searched /opt/hermes/.playwright & /home/agent/.hermes/playwright-data)"; exit 1
 fi
 mkdir -p /opt/data/chrome-profile
 exec s6-setuidgid hermes "$CHROME" \
     --remote-debugging-port=9222 \
     --remote-debugging-address=127.0.0.1 \
     --no-sandbox --disable-gpu --disable-dev-shm-usage \
+    --disable-blink-features=AutomationControlled \
+    --disable-background-networking \
+    --disable-field-trial-config \
+    --no-first-run --no-default-browser-check \
     --user-data-dir=/opt/data/chrome-profile \
     --window-size=1280,800 \
-    "https://gemini.google.com/u/0/app"
+    "https://www.kimi.com/"
