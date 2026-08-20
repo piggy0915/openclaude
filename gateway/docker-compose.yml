@@ -346,7 +346,7 @@ services:
   # Coze 适配器 - 将 Coze 请求转换为 Hermes API
   # ============================================================
   coze-adapter:
-    image: python:3.11-slim
+    image: python:3.13-slim
     container_name: coze-adapter
     restart: unless-stopped
     env_file:
@@ -420,7 +420,7 @@ services:
           memory: 1G
 
   obsidian-sync:
-    image: python:3.11-slim
+    image: python:3.13-slim
     container_name: obsidian-sync
     restart: unless-stopped
     env_file:

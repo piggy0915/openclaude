@@ -79,7 +79,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
     --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     -e /opt/hermes \
     'qdrant-client>=1.18.0' \
-    'firecrawl-py>=4.28.2' \
+    'firecrawl-py>=4.37.0' \
     'lark-oapi==1.6.8' \
     'qrcode==7.4.2' \
     'dingtalk-stream==0.24.3' \
