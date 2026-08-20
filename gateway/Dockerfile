@@ -4,7 +4,14 @@ FROM nousresearch/hermes-agent:main
 # 环境变量
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 ENV NODE_VERSION=24
+# Increase Node.js memory limit to prevent OOM during build
+ENV NODE_OPTIONS=--max-old-space-size=4096
+
+# 设置环境变量让node-gyp和npm使用国内镜像（所有配置通过环境变量）
 ENV NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
+ENV NODEJS_ORG_MIRROR=https://registry.npmmirror.com/-/binary/node
+ENV ELECTRON_MIRROR=https://registry.npmmirror.com/-/binary/electron/
+ENV PYTHON_MIRROR=https://registry.npmmirror.com/-/binary/python/
 USER root
 
 # AgentChat: Chromium 存镜像内路径（/opt/hermes 无卷挂载，避免被 hermes_data_volume 遮蔽）
@@ -49,7 +56,8 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
     apt-get autoremove -y || true
 
 RUN apt-get update && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
         build-essential \
         curl \
         wget \
@@ -75,11 +83,17 @@ RUN python3 -m venv /opt/hermes/.venv
 # ============================================
 # 步骤 7: 安装 Python 包（分组安装，便于定位）
 # ============================================
+RUN /opt/hermes/.venv/bin/pip install \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    --extra-index-url https://pypi.org/simple \
+    --no-cache-dir \
+    -e /opt/hermes \
+    'firecrawl-py>=4.37.0'
+
 RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
     --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     -e /opt/hermes \
     'qdrant-client>=1.18.0' \
-    'firecrawl-py>=4.37.0' \
     'lark-oapi==1.6.8' \
     'qrcode==7.4.2' \
     'dingtalk-stream==0.24.3' \
