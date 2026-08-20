@@ -198,7 +198,7 @@ RUN npm i -g @colbymchenry/codegraph && \
 # ============================================
 # 步骤 19: 安装其他 MCP 包
 # ============================================
-RUN npm install -g ppt-mcp@2.0.0 @upstash/context7-mcp@3.2.2 @drawio/mcp@1.3.2 && \
+RUN npm install -g ppt-mcp@2.0.0 @upstash/context7-mcp@4.0.2 @drawio/mcp@1.6.0 && \
     test -f /usr/lib/node_modules/ppt-mcp/build/index.js && \
     test -f /usr/lib/node_modules/@upstash/context7-mcp/dist/index.js && \
     test -f /usr/lib/node_modules/@drawio/mcp/src/index.js && \

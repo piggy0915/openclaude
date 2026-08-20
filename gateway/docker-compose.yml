@@ -569,7 +569,7 @@ services:
   # ============================================================
   hermes:
     image: hermes-agent:main
-#    image: hermes-agent:v2026.8.3
+#    image: hermes-agent:v2026.8.18
     container_name: hermes
     restart: unless-stopped
     ports:
@@ -601,7 +601,7 @@ services:
 
     environment:
       - TZ=Asia/Shanghai          # 设置时区
-      - AGENTCHAT_CHROME_CDP=1      # 启用 s6 chrome-cdp（AgentChat CDP 9222）
+      - AGENTCHAT_CHROME_CDP=true      # 启用 s6 chrome-cdp（AgentChat CDP 9222）
       - HERMES_HOME=/home/agent/.hermes  # 关键：修改 HOME 目录
       - HERMES_LAZY_INSTALL_TARGET=/home/agent/.hermes/lazy-packages
       - HERMES_ALLOW_ROOT_GATEWAY=1
