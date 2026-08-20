@@ -636,7 +636,7 @@ services:
       - HERMES_PLUGINS_DIR=/opt/hermes/plugins
       - CLAUDE_PLUGINS_DIR=/root/.hermes/plugins
       - PATH=/opt/hermes/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-      - PYTHONPATH=/opt/hermes/.venv/lib/python3.11/site-packages
+      - PYTHONPATH=/opt/hermes/.venv/lib/python3.13/site-packages
       - AUTOLOAD_PLUGINS=true
 
       - PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
