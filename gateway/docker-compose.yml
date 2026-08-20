@@ -640,6 +640,7 @@ services:
       - AUTOLOAD_PLUGINS=true
 
       - PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
+      - HERMES_FTS5_CJK_SO=/usr/local/lib/libfts5_cjk.so
 
       # SearXNG 搜索后端（免费无限次）
       - SEARXNG_URL=http://searxng:4000/search?format=json

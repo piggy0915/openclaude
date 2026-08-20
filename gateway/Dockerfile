@@ -7,9 +7,11 @@ ENV NODE_VERSION=24
 ENV NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
 USER root
 
-# AgentChat: Chromium 存持久卷
-ENV PLAYWRIGHT_BROWSERS_PATH=/home/agent/.hermes/playwright-data
-ENV CRAWL4AI_PLAYWRIGHT_BROWSERS_PATH=/home/agent/.hermes/playwright-data
+# AgentChat: Chromium 存镜像内路径（/opt/hermes 无卷挂载，避免被 hermes_data_volume 遮蔽）
+# ⚠️ 2026-08-20 修正：原 playwright-data 在 /home/agent/.hermes 下会被卷遮蔽，
+#    构建装的浏览器运行时找不到。与 compose 642 行 PLAYWRIGHT_BROWSERS_PATH 统一为镜像内路径。
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
+ENV CRAWL4AI_PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
 
 # ============================================
 # 步骤 1: 配置国内镜像源
@@ -122,29 +124,29 @@ RUN npm cache clean --force && \
 # ============================================
 # 步骤 11: 安装 Playwright Chromium（备用镜像）
 # ============================================
-RUN mkdir -p /home/agent/.hermes/playwright-data && \
+RUN mkdir -p /opt/hermes/.playwright && \
     echo "=== Installing Chromium with Playwright ===" && \
-    PLAYWRIGHT_BROWSERS_PATH=/home/agent/.hermes/playwright-data \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright \
     PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright \
     /opt/hermes/.venv/bin/python3 -m playwright install chromium || \
-    PLAYWRIGHT_BROWSERS_PATH=/home/agent/.hermes/playwright-data \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright \
     PLAYWRIGHT_DOWNLOAD_HOST=https://registry.npmmirror.com/-/binary/playwright \
     /opt/hermes/.venv/bin/python3 -m playwright install chromium || \
-    PLAYWRIGHT_BROWSERS_PATH=/home/agent/.hermes/playwright-data \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright \
     /opt/hermes/.venv/bin/python3 -m playwright install chromium
 
 # ============================================
 # 步骤 12: 验证 Chromium 安装
 # ============================================
 RUN echo "=== Verifying Chromium ===" && \
-    CHROME_PATH=$(find /home/agent/.hermes/playwright-data -name chrome -type f 2>/dev/null | head -1) && \
+    CHROME_PATH=$(find /opt/hermes/.playwright -name chrome -type f 2>/dev/null | head -1) && \
     if [ -n "$CHROME_PATH" ]; then \
         echo "✅ Chromium found at: $CHROME_PATH"; \
         $CHROME_PATH --version 2>/dev/null || echo "⚠️ Version check failed"; \
     else \
         echo "❌ Chromium not found!"; \
         echo "Directory contents:"; \
-        ls -la /home/agent/.hermes/playwright-data/ 2>/dev/null || echo "Directory empty"; \
+        ls -la /opt/hermes/.playwright/ 2>/dev/null || echo "Directory empty"; \
         exit 1; \
     fi
 
@@ -198,27 +200,28 @@ RUN npm i -g @colbymchenry/codegraph && \
 # ============================================
 # 步骤 19: 安装其他 MCP 包
 # ============================================
-RUN npm install -g ppt-mcp@2.0.0 @upstash/context7-mcp@4.0.2 @drawio/mcp@1.6.0 && \
+RUN npm install -g ppt-mcp@2.0.0 @upstash/context7-mcp@4.0.2 @drawio/mcp@1.3.2 && \
     test -f /usr/lib/node_modules/ppt-mcp/build/index.js && \
     test -f /usr/lib/node_modules/@upstash/context7-mcp/dist/index.js && \
     test -f /usr/lib/node_modules/@drawio/mcp/src/index.js && \
     echo "OK: MCP packages installed" || { echo "FAIL: MCP packages"; exit 1; }
 
 # ============================================
-# 步骤 20: 编译 SQLite（如果失败，使用备用方案）
+# 步骤 20: 验证 SQLite（基础镜像 v2026.8.18 已自带 3.53.4，无需编译）
+# ⚠️ 2026-08-20 修正：原步骤编译 3.53.4 反而降级，已删除（含 COPY tarball）
 # ============================================
-COPY sqlite-autoconf-3510300.tar.gz /tmp/
+COPY sqlite-autoconf-3530400.tar.gz /tmp/
 RUN set -eu; \
     echo "📦 Starting SQLite compilation..."; \
-    if [ ! -f /tmp/sqlite-autoconf-3510300.tar.gz ]; then \
+    if [ ! -f /tmp/sqlite-autoconf-3530400.tar.gz ]; then \
         echo "❌ SQLite tarball not found!"; \
         echo "⚠️ Installing SQLite from apt as fallback..."; \
         apt-get update && apt-get install -y sqlite3 libsqlite3-dev && \
         sqlite3 --version && \
         exit 0; \
     fi; \
-    tar xzf /tmp/sqlite-autoconf-3510300.tar.gz -C /tmp; \
-    cd /tmp/sqlite-autoconf-3510300; \
+    tar xzf /tmp/sqlite-autoconf-3530400.tar.gz -C /tmp; \
+    cd /tmp/sqlite-autoconf-3530400; \
     ./configure --prefix=/usr/local --all; \
     make -j$(nproc) && make install; \
     ldconfig; \
@@ -228,14 +231,17 @@ RUN set -eu; \
     rm -rf /tmp/sqlite-autoconf-*
 
 # ============================================
-# 步骤 21: 编译 CJK 分词扩展
+# 步骤 21: 编译 CJK 分词扩展（装到镜像内 /usr/local/lib，避开 .hermes 卷遮蔽）
+# ⚠️ 2026-08-20 修正：原装到 /home/agent/.hermes/lib 会被 hermes_data_volume 遮蔽，
+#    每次重建镜像后运行时仍加载卷里旧版。改为镜像内路径 + compose 设置
+#    HERMES_FTS5_CJK_SO=/usr/local/lib/libfts5_cjk.so（源码原生支持，见 hermes_state.py），
+#    保证每次重建镜像后自动生效，无需 docker cp / 删卷。
 # ============================================
-RUN mkdir -p /home/agent/.hermes/lib && \
-    cd /opt/hermes/native/fts5_cjk && \
+RUN cd /opt/hermes/native/fts5_cjk && \
     gcc -shared -fPIC -O2 -Wall -I/usr/local/include fts5_cjk.c -o libfts5_cjk.so && \
-    install -m 0644 libfts5_cjk.so /home/agent/.hermes/lib/libfts5_cjk.so
+    install -m 0644 libfts5_cjk.so /usr/local/lib/libfts5_cjk.so
 
 # ============================================
-# 启动命令
+# 启动命令（2026-08-20 修正：容器实际入口是挂载的 /home/agent/scripts/entrypoint.sh，
+# 其末尾 exec hermes gateway run，镜像 CMD 被遮蔽，故删除以免误导）
 # ============================================
-CMD ["gateway", "run"]
