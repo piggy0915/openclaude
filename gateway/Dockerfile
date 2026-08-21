@@ -110,6 +110,23 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
 RUN /opt/hermes/.venv/bin/pip install firecrawl-anydoc --index-url https://pypi.org/simple
 
 # ============================================
+# 步骤 7.5: 文档处理依赖（openpyxl/docx/pptx 等，2026-08-21 固化）
+# 注意：原临时安装写在容器可写层，容器重建即丢失（venv 在镜像内非持久卷）。
+# 统一在此固化，构建后无需再手动 uv pip install。
+# ============================================
+RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    'openpyxl>=3.1.5' \
+    'python-docx>=1.1.0' \
+    'python-pptx>=1.0.2' \
+    'defusedxml>=0.7.1' \
+    'pymupdf>=1.24.0' \
+    'Pillow>=10.0.0' \
+    'lxml>=5.0.0' \
+    'pandas>=2.0.0' \
+    'xlsxwriter>=3.1.0'
+
+# ============================================
 # 步骤 8: 安装并升级 npm
 # ============================================
 RUN npm --version || apt-get install -y npm && \
