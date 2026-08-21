@@ -32,6 +32,10 @@ const ENV_KEYS = [
   'MISTRAL_API_KEY',
   'MINIMAX_API_KEY',
   'LONGCAT_API_KEY',
+  'APISMART_API_KEY',
+  'CONCENTRATE_API_KEY',
+  'CONCENTRATE_BASE_URL',
+  'CONCENTRATE_MODEL',
   'NVIDIA_API_KEY',
   'NVIDIA_NIM',
   'BNKR_API_KEY',
@@ -184,6 +188,121 @@ test('non-OpenAI LongCat path falls back to generic OpenAI validation', async ()
 
   await expect(getProviderValidationError(process.env)).resolves.toBeNull()
 })
+
+test('non-canonical ApiSmart host falls back to generic OpenAI validation', async () => {
+  process.env.CLAUDE_CODE_USE_OPENAI = '1'
+  process.env.OPENAI_BASE_URL = 'https://gw.apismart.ai:8443/v1'
+  process.env.OPENAI_MODEL = 'custom-model'
+  process.env.OPENAI_API_KEY = 'generic-key'
+
+  await expect(getProviderValidationError(process.env)).resolves.toBeNull()
+})
+
+test('noncanonical ApiSmart paths do not validate a dedicated credential', async () => {
+  process.env.CLAUDE_CODE_USE_OPENAI = '1'
+  process.env.OPENAI_BASE_URL = 'https://gw.apismart.ai/v2'
+  process.env.OPENAI_MODEL = 'DEEPSEEK_V4_FLASH'
+  process.env.APISMART_API_KEY = 'apismart-key'
+  delete process.env.OPENAI_API_KEY
+  delete process.env.OPENAI_API_KEYS
+
+  const message = await getProviderValidationError(process.env)
+  expect(message).not.toBeNull()
+  expect(message).not.toContain('ApiSmart auth is required')
+  expect(message).toContain(
+    'OPENAI_API_KEYS or OPENAI_API_KEY is required when CLAUDE_CODE_USE_OPENAI=1',
+  )
+})
+
+test('noncanonical Concentrate host paths fall back to generic OpenAI validation', async () => {
+  process.env.CLAUDE_CODE_USE_OPENAI = '1'
+  process.env.OPENAI_BASE_URL = 'https://api.concentrate.ai/staging/v1'
+  process.env.OPENAI_API_KEY = 'generic-proxy-key'
+  delete process.env.CONCENTRATE_API_KEY
+  delete process.env.OPENAI_API_KEYS
+
+  await expect(getProviderValidationError(process.env)).resolves.toBeNull()
+})
+
+test('canonical Concentrate base supports the documented generic OpenAI credential', async () => {
+  process.env.CLAUDE_CODE_USE_OPENAI = '1'
+  process.env.OPENAI_BASE_URL = 'https://api.concentrate.ai/v1'
+  process.env.OPENAI_API_KEY = 'generic-concentrate-key'
+  delete process.env.CONCENTRATE_API_KEY
+
+  await expect(getProviderValidationError(process.env)).resolves.toBeNull()
+})
+
+test('noncanonical same-host base rejects a selected CONCENTRATE_API_KEY route', async () => {
+  process.env.CLAUDE_CODE_USE_OPENAI = '1'
+  process.env.OPENAI_BASE_URL = 'https://api.concentrate.ai/staging/v1'
+  process.env.CONCENTRATE_API_KEY = 'concentrate-key'
+  delete process.env.OPENAI_API_KEY
+  delete process.env.OPENAI_API_KEYS
+
+  await expect(getProviderValidationError(process.env)).resolves.toBe(
+    'Concentrate credentials require the canonical https://api.concentrate.ai/v1 endpoint.',
+  )
+})
+
+test('noncanonical CONCENTRATE_BASE_URL is rejected instead of silently withholding its key', async () => {
+  process.env.CLAUDE_CODE_USE_OPENAI = '1'
+  process.env.CONCENTRATE_BASE_URL = 'https://api.concentrate.ai/staging/v1'
+  process.env.CONCENTRATE_API_KEY = 'concentrate-key'
+  delete process.env.OPENAI_API_KEY
+  delete process.env.OPENAI_API_KEYS
+
+  await expect(getProviderValidationError(process.env)).resolves.toBe(
+    'Concentrate credentials require the canonical https://api.concentrate.ai/v1 endpoint.',
+  )
+})
+
+test('key-only noncanonical Concentrate setup validates before OpenAI mode is enabled', async () => {
+  process.env.CONCENTRATE_BASE_URL = 'https://api.concentrate.ai/staging/v1'
+  process.env.CONCENTRATE_API_KEY = 'concentrate-key'
+  delete process.env.OPENAI_API_KEY
+  delete process.env.OPENAI_API_KEYS
+
+  await expect(getProviderValidationError(process.env)).resolves.toBe(
+    'Concentrate credentials require the canonical https://api.concentrate.ai/v1 endpoint.',
+  )
+})
+
+test('Concentrate key-only setup validates before client defaults are applied', async () => {
+  process.env.CLAUDE_CODE_USE_OPENAI = '1'
+  process.env.CONCENTRATE_API_KEY = 'concentrate-key'
+
+  await expect(getProviderValidationError(process.env)).resolves.toBeNull()
+})
+
+test.each(['SUA_CHAVE', 'sua_chave', 'null', 'undefined', ' NULL '])(
+  'Concentrate validation rejects placeholder CONCENTRATE_API_KEY %s',
+  async placeholder => {
+    process.env.CLAUDE_CODE_USE_OPENAI = '1'
+    process.env.OPENAI_BASE_URL = 'https://api.concentrate.ai/v1'
+    process.env.CONCENTRATE_API_KEY = placeholder
+
+    await expect(getProviderValidationError(process.env)).resolves.toBe(
+      'Concentrate auth is required. Set CONCENTRATE_API_KEY or OPENAI_API_KEY.',
+    )
+  },
+)
+
+test.each(['SUA_CHAVE', 'sua_chave', 'null', 'undefined', ' NULL '])(
+  'ApiSmart validation rejects placeholder APISMART_API_KEY %s',
+  async placeholder => {
+    process.env.CLAUDE_CODE_USE_OPENAI = '1'
+    process.env.OPENAI_BASE_URL = 'https://gw.apismart.ai/v1'
+    process.env.OPENAI_MODEL = 'DEEPSEEK_V4_FLASH'
+    process.env.APISMART_API_KEY = placeholder
+    delete process.env.OPENAI_API_KEY
+    delete process.env.OPENAI_API_KEYS
+
+    await expect(getProviderValidationError(process.env)).resolves.toBe(
+      'ApiSmart auth is required. Set APISMART_API_KEY.',
+    )
+  },
+)
 
 test('codex auth error redacts descriptor-declared provider secret values used as model text', async () => {
   const providerSecret = 'ogw-provider-secret'

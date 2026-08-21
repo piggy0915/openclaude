@@ -24,7 +24,34 @@ export const partners: Partner[] = [
     logoDark: '/partners/aimlapi-logo-dark.svg',
     height: 30,
   },
-  { name: 'Novita AI', url: 'https://novita.ai/', logo: '/partners/novita-logo.png', height: 34 },
+  {
+    name: 'Novita AI',
+    url: 'https://novita.ai/',
+    logo: '/partners/novita-logo.svg',
+    logoDark: '/partners/novita-logo-dark.svg',
+    height: 26,
+  },
+  {
+    name: 'ApiSmart',
+    url: 'https://www.apismart.ai',
+    logo: '/partners/apismart-logo.png',
+    logoDark: '/partners/apismart-logo-dark.png',
+    height: 30,
+  },
+  {
+    name: 'Concentrate',
+    url: 'https://concentrate.ai/',
+    logo: '/partners/concentrate-logo.svg',
+    logoDark: '/partners/concentrate-logo-dark.svg',
+    height: 36,
+  },
+  {
+    name: 'Exa',
+    url: 'https://exa.ai/',
+    logo: '/partners/exa-logo.svg',
+    logoDark: '/partners/exa-logo-dark.svg',
+    height: 28,
+  },
 ]
 
 export const community = [
