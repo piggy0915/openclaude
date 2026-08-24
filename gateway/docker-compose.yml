@@ -1,6 +1,4 @@
 # docker-compose.yml
-version: '3.8'
-
 services:
 
   # ============================================================
@@ -109,7 +107,6 @@ services:
           cpus: '0.3'
           memory: 256M
 
-  # ---------- 核心服务 ----------
   dify-api:
     image: langgenius/dify-api:1.15.0  # 使用具体版本号
     container_name: dify-api
@@ -144,13 +141,19 @@ services:
       SSRF_PROXY_HTTPS_URL: http://ssrf_proxy:3128
       # Dify 核心配置
       SECRET_KEY: ${DIFY_SECRET_KEY:-dify123456}
-      CONSOLE_WEB_URL: http://localhost:8082  # 控制台访问地址
-      CONSOLE_API_URL: http://localhost:8082
-      SERVICE_API_URL: http://localhost:8082
-      APP_WEB_URL: http://localhost:8082
+      CONSOLE_WEB_URL: ${CONSOLE_WEB_URL:-http://localhost:8083}
+      CONSOLE_API_URL: ${CONSOLE_API_URL:-http://localhost:8082}
+      SERVICE_API_URL: ${SERVICE_API_URL:-http://localhost:8082}
+      APP_WEB_URL: ${APP_WEB_URL:-http://localhost:8083}
+      APP_API_URL: ${APP_API_URL:-http://localhost:8082}
+      PLUGIN_DAEMON_URL: ${PLUGIN_DAEMON_URL:-http://dify-plugin_daemon:5002}
+      PLUGIN_DAEMON_KEY: ${PLUGIN_DAEMON_KEY:-sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V}
       MODE: api
       LOG_LEVEL: INFO
       TZ: Asia/Shanghai
+      LC_ALL: en_US.UTF-8
+      LANG: en_US.UTF-8
+
     ports:
       - "8082:5001"  # 暴露 API 端口
     networks:
@@ -220,8 +223,8 @@ services:
     container_name: dify-web
     restart: unless-stopped
     environment:
-      CONSOLE_API_URL: http://dify-api:5001
-      APP_API_URL: http://dify-api:5001
+      CONSOLE_API_URL: ${CONSOLE_API_URL:-http://192.168.137.10:8082}
+      APP_API_URL: ${APP_API_URL:-http://192.168.137.10:8082}
     ports:
       - "8083:3000"  # 暴露 Web 界面端口
     networks:
@@ -346,7 +349,7 @@ services:
   # Coze 适配器 - 将 Coze 请求转换为 Hermes API
   # ============================================================
   coze-adapter:
-    image: python:3.13-slim
+    image: python:3.14-slim
     container_name: coze-adapter
     restart: unless-stopped
     env_file:
@@ -371,7 +374,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: '0.3'
           memory: 256M
 
   nginx-obsidian:
@@ -387,9 +390,17 @@ services:
     depends_on:
       - obsidian
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 2G
+        reservations:
+          cpus: '0.1'
+          memory: 1G
 
   obsidian:
-    image: ghcr.io/linuxserver/obsidian:1.12.7
+    image: ghcr.io/linuxserver/obsidian:1.13.7
     container_name: obsidian
     security_opt:
       - no-new-privileges:false
@@ -420,7 +431,7 @@ services:
           memory: 1G
 
   obsidian-sync:
-    image: python:3.13-slim
+    image: python:3.14-slim
     container_name: obsidian-sync
     restart: unless-stopped
     env_file:
@@ -451,7 +462,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: '0.3'
           memory: 512M
 
 #  valkey:
@@ -477,7 +488,7 @@ services:
   # SearXNG - 自建元搜索引擎（免费无限次搜索）
   # ============================================================
   searxng:
-    image: searxng/searxng:2026.5.23-323ce7600
+    image: searxng/searxng:2026.8.22-9fea41204
     container_name: searxng
     restart: unless-stopped
 #    depends_on:
@@ -513,7 +524,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'      # Qdrant 计算密集，给足资源
+          cpus: '0.5'      # Qdrant 计算密集，给足资源
           memory: 2G
 
 
@@ -590,10 +601,9 @@ services:
       # ========== Obsidian 知识库目录 ==========
 #      - ./data/obsidian/knowledge:/knowledge_base/obsidian:rw
 
-      - workspace_volume:/opt/data/workspace
       - opt_data_volume:/opt/data:rw
       - app_volume:/app:ro
-      - openclaude_volume:/root/.openclaude
+#      - openclaude_volume:/root/.openclaude
       - ./config/.env:/home/agent/.env
       - ./config/config.yaml:/home/agent/config.yaml
       - ./config/openclaude/.openclaude.json:/root/.openclaude.json:rw
@@ -703,7 +713,7 @@ services:
         max-file: "3"
 
   hermes-webui:
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.44}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.46}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
 #    user: "${UID:-1000}:${GID:-1000}"
     ports:
@@ -727,7 +737,6 @@ services:
       - hermes_obsidian_volume:/knowledge_base/obsidian:rw
       # ========== SSH 私钥挂载（建议只读） ==========
       - ssh_volume:/root/.ssh:ro
-      - workspace_volume:/opt/data/workspace
       - opt_data_volume:/opt/data:rw
       - app_volume:/app:ro
 
@@ -770,8 +779,12 @@ services:
       resources:
         limits:
           memory: 2G            # 面板内存限制 512MB
-          cpus: '2.0'
-
+          cpus: '0.5'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # ============================================================
   # Embedding 服务（使用 llama.cpp 容器 + 宿主机模型）
@@ -790,7 +803,8 @@ services:
       -t 4
 #      --log-format json
     volumes:
-      - ./models:/models              # 宿主机模型目录挂载到容器内 /models
+      - ./models:/models:ro              # 宿主机模型目录挂载到容器内 /models
+      - ./logs/embedding:/logs  # 日志目录
     ports:
       - "8001:8000"
     networks:
@@ -806,7 +820,11 @@ services:
         reservations:
           cpus: '1.0'
           memory: 2G
-
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # ============================================================
   # Rerank 服务（使用 llama.cpp 容器 + 宿主机模型）
@@ -825,7 +843,8 @@ services:
       -t 4
 #      --log-format json
     volumes:
-      - ./models:/models
+      - ./models:/models:ro
+      - ./logs/reranker:/logs
     ports:
       - "8002:8000"
     networks:
@@ -841,7 +860,11 @@ services:
         reservations:
           cpus: '0.5'      # Rerank 计算量略小于 embedding
           memory: 1G
-
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 #  elasticsearch:
 #    image: elasticsearch:9.4.2
 #    container_name: elasticsearch
@@ -939,14 +962,6 @@ volumes:
       type: none
       device: ${PWD}/app
       o: bind
-  workspace_volume:
-    # 可选配置
-    name: hermes_workspace
-    driver: local  # 默认就是 local
-    driver_opts:   # 高级选项
-      type: none
-      device: ${PWD}/data/workspace
-      o: bind
   ssh_volume:
     # 可选配置
     name: hermes_ssh
@@ -962,4 +977,5 @@ volumes:
 networks:
   rag-network:
     driver: bridge
+    external: true
     name: rag-network  # 明确指定网络名为 rag-network
