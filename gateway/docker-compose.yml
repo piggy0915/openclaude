@@ -58,7 +58,7 @@ services:
           memory: 512M
 
   sandbox:
-    image: langgenius/dify-sandbox:0.2.15
+    image: langgenius/dify-sandbox:main
     container_name: sandbox
     restart: unless-stopped
     environment:
@@ -108,11 +108,13 @@ services:
           memory: 256M
 
   dify-api:
-    image: langgenius/dify-api:1.15.0  # 使用具体版本号
+    image: langgenius/dify-api:1.16.1  # 使用具体版本号
     container_name: dify-api
     restart: unless-stopped
     env_file:
       - ./.env
+    volumes:
+      - dify_storage_volume:/app/api/storage
     environment:
       # 核心数据库配置 - 指向你的外部 PostgreSQL
       DB_USERNAME: ${DIFY_DB_USERNAME:-postgres}
@@ -172,12 +174,14 @@ services:
           memory: 2G
 
   dify-worker:
-    image: langgenius/dify-api:1.15.0
+    image: langgenius/dify-api:1.16.1
     container_name: dify-worker
     restart: unless-stopped
     command: /bin/bash /entrypoint.sh worker
     env_file:
       - ./.env
+    volumes:
+      - dify_storage_volume:/app/api/storage
     environment:
       # 与 dify-api 保持完全相同的环境变量
       DB_USERNAME: ${DIFY_DB_USERNAME:-postgres}
@@ -219,7 +223,7 @@ services:
           memory: 2G
 
   dify-web:
-    image: langgenius/dify-web:1.15.0
+    image: langgenius/dify-web:1.16.1
     container_name: dify-web
     restart: unless-stopped
     environment:
@@ -239,7 +243,7 @@ services:
 
 
   dify-worker_beat:
-    image: langgenius/dify-api:1.15.0
+    image: langgenius/dify-api:1.16.1
     container_name: dify-worker_beat
     restart: unless-stopped
     command: /bin/bash /entrypoint.sh beat
@@ -274,7 +278,7 @@ services:
           memory: 512M
 
   dify-plugin_daemon:
-    image: langgenius/dify-plugin-daemon:0.6.3-local
+    image: langgenius/dify-plugin-daemon:0.6.10-local
     container_name: dify-plugin_daemon
     restart: unless-stopped
     env_file:
@@ -532,7 +536,7 @@ services:
   # Qdrant - 高性能向量数据库（替代 ChromaDB）
   # ============================================================
   qdrant:
-    image: qdrant/qdrant:v1.18
+    image: qdrant/qdrant:v1.19
     container_name: qdrant
     restart: unless-stopped
     ports:
@@ -713,7 +717,7 @@ services:
         max-file: "3"
 
   hermes-webui:
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.46}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.6.47}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
 #    user: "${UID:-1000}:${GID:-1000}"
     ports:
@@ -970,7 +974,13 @@ volumes:
       type: none
       device: ${HOME}/.ssh
       o: bind
-
+  dify_storage_volume:
+    name: dify_storage_data
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/data/dify
+      o: bind
 # ============================================================
 # 网络配置
 # ============================================================

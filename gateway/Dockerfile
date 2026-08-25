@@ -21,7 +21,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
 ENV CRAWL4AI_PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
 
 # ============================================
-# 步骤 1: 配置国内镜像源
+# 步骤 3: 配置国内镜像源
 # ============================================
 RUN if [ -f /etc/apt/sources.list ]; then \
         sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
@@ -34,13 +34,13 @@ RUN if [ -f /etc/apt/sources.list ]; then \
     fi
 
 # ============================================
-# 步骤 2: 复制 AgentChat 框架
+# 步骤 4: 复制 AgentChat 框架
 # ============================================
 COPY agentchat-framework/ /opt/agentchat/
 COPY chrome-cdp/ /etc/s6-overlay/s6-rc.d/chrome-cdp/
 
 # ============================================
-# 步骤 3: 配置 s6 服务和符号链接
+# 步骤 5: 配置 s6 服务和符号链接
 # ============================================
 RUN echo "chrome-cdp" >> /etc/s6-overlay/s6-rc.d/user/contents.d/chrome-cdp && \
     ln -sf /opt/agentchat/scripts/start-chrome-debug.sh /usr/local/bin/agentchat-start && \
@@ -48,7 +48,7 @@ RUN echo "chrome-cdp" >> /etc/s6-overlay/s6-rc.d/user/contents.d/chrome-cdp && \
     ln -sf /opt/agentchat/skills/AgentChat-OneWeb/index.js /usr/local/bin/agentchat-oneweb
 
 # ============================================
-# 步骤 4: 清理旧 Node.js 并安装系统依赖
+# 步骤 6: 清理旧 Node.js 并安装系统依赖
 # ============================================
 RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack && \
     rm -rf /usr/local/lib/node_modules && \
@@ -66,22 +66,23 @@ RUN apt-get update && \
         libdrm2 \
         libxkbcommon0 \
         libgbm1 \
-        libasound2
+        libasound2 \
+        ffmpeg
 
 # ============================================
-# 步骤 5: 安装 Node.js 24
+# 步骤 8: 安装 Node.js 24
 # ============================================
 RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - && \
     apt-get install -y nodejs python3-pip && \
     npm config set registry ${NPM_CONFIG_REGISTRY}
 
 # ============================================
-# 步骤 6: 创建 Python 虚拟环境
+# 步骤 9: 创建 Python 虚拟环境
 # ============================================
 RUN python3 -m venv /opt/hermes/.venv
 
 # ============================================
-# 步骤 7: 安装 Python 包（分组安装，便于定位）
+# 步骤 10: 安装 Python 包（分组安装，便于定位）
 # ============================================
 RUN /opt/hermes/.venv/bin/pip install \
     --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
@@ -94,6 +95,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
     --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     -e /opt/hermes \
     'qdrant-client>=1.18.0' \
+    'psycopg[binary]>=3.2.0' \
     'lark-oapi==1.6.8' \
     'qrcode==7.4.2' \
     'dingtalk-stream==0.24.3' \
@@ -110,7 +112,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
 RUN /opt/hermes/.venv/bin/pip install firecrawl-anydoc --index-url https://pypi.org/simple
 
 # ============================================
-# 步骤 7.5: 文档处理依赖（openpyxl/docx/pptx 等，2026-08-21 固化）
+# 步骤 14: 文档处理依赖（openpyxl/docx/pptx 等，2026-08-21 固化）
 # 注意：原临时安装写在容器可写层，容器重建即丢失（venv 在镜像内非持久卷）。
 # 统一在此固化，构建后无需再手动 uv pip install。
 # ============================================
@@ -127,7 +129,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
     'xlsxwriter>=3.1.0'
 
 # ============================================
-# 步骤 8: 安装并升级 npm
+# 步骤 15: 安装并升级 npm
 # ============================================
 RUN npm --version || apt-get install -y npm && \
     npm config set prefix /usr && \
@@ -135,14 +137,14 @@ RUN npm --version || apt-get install -y npm && \
     npm --version
 
 # ============================================
-# 步骤 9: 安装全局 npm 工具
+# 步骤 16: 安装全局 npm 工具
 # ============================================
 RUN npm install -g @gitlawb/openclaude@latest reasonix@latest @firecrawl/anydoc && \
     openclaude --version && \
     reasonix --version
 
 # ============================================
-# 步骤 10: 清理 npm 缓存并创建符号链接
+# 步骤 17: 清理 npm 缓存并创建符号链接
 # ============================================
 RUN npm cache clean --force && \
     node --version && \
@@ -153,7 +155,7 @@ RUN npm cache clean --force && \
     ln -sf /usr/lib/node_modules/.bin/reasonix /usr/local/bin/reasonix
 
 # ============================================
-# 步骤 11: 安装 Playwright Chromium（备用镜像）
+# 步骤 18: 安装 Playwright Chromium（备用镜像）
 # ============================================
 RUN mkdir -p /opt/hermes/.playwright && \
     echo "=== Installing Chromium with Playwright ===" && \
@@ -167,7 +169,7 @@ RUN mkdir -p /opt/hermes/.playwright && \
     /opt/hermes/.venv/bin/python3 -m playwright install chromium
 
 # ============================================
-# 步骤 12: 验证 Chromium 安装
+# 步骤 19: 验证 Chromium 安装
 # ============================================
 RUN echo "=== Verifying Chromium ===" && \
     CHROME_PATH=$(find /opt/hermes/.playwright -name chrome -type f 2>/dev/null | head -1) && \
@@ -182,12 +184,12 @@ RUN echo "=== Verifying Chromium ===" && \
     fi
 
 # ============================================
-# 步骤 13: 清理 apt 缓存
+# 步骤 20: 清理 apt 缓存
 # ============================================
 RUN apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ============================================
-# 步骤 14: AgentChat npm 依赖
+# 步骤 21: AgentChat npm 依赖
 # ============================================
 RUN cd /opt/agentchat && \
     npm install --no-audit --no-fund && \
@@ -197,7 +199,7 @@ RUN cd /opt/agentchat && \
     { echo "FAIL: agentchat npm deps"; exit 1; }
 
 # ============================================
-# 步骤 15: 创建 skills 符号链接
+# 步骤 22: 创建 skills 符号链接
 # ============================================
 RUN mkdir -p /home/agent/.hermes/skills /home/agent/.claude && \
     for s in AgentChat-OneWeb AgentChat-IndependentTasks AgentChat-WebSubAgent; do \
@@ -206,7 +208,7 @@ RUN mkdir -p /home/agent/.hermes/skills /home/agent/.claude && \
     ln -sfn /home/agent/.hermes/skills /home/agent/.claude/skills
 
 # ============================================
-# 步骤 16: 安装 Serena
+# 步骤 23: 安装 Serena
 # ============================================
 RUN python3 -m venv /opt/serena-venv && \
     /opt/serena-venv/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
@@ -214,14 +216,14 @@ RUN python3 -m venv /opt/serena-venv && \
     HOME=/home/agent /opt/serena-venv/bin/serena init
 
 # ============================================
-# 步骤 17: 安装 MCP 客户端依赖
+# 步骤 24: 安装 MCP 客户端依赖
 # ============================================
 RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
     --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     mcp
 
 # ============================================
-# 步骤 18: 安装 CodeGraph
+# 步骤 25: 安装 CodeGraph
 # ============================================
 RUN npm i -g @colbymchenry/codegraph && \
     ln -sf "$(npm root -g)/@colbymchenry/codegraph/npm-shim.js" /usr/local/bin/codegraph && \
@@ -229,7 +231,7 @@ RUN npm i -g @colbymchenry/codegraph && \
     test -x /usr/local/bin/codegraph || { echo "FAIL: CodeGraph"; exit 1; }
 
 # ============================================
-# 步骤 19: 安装其他 MCP 包
+# 步骤 26: 安装其他 MCP 包
 # ============================================
 RUN npm install -g ppt-mcp@2.0.0 @upstash/context7-mcp@4.0.2 @drawio/mcp@1.3.2 && \
     test -f /usr/lib/node_modules/ppt-mcp/build/index.js && \
@@ -238,7 +240,28 @@ RUN npm install -g ppt-mcp@2.0.0 @upstash/context7-mcp@4.0.2 @drawio/mcp@1.3.2 &
     echo "OK: MCP packages installed" || { echo "FAIL: MCP packages"; exit 1; }
 
 # ============================================
-# 步骤 20: 验证 SQLite（基础镜像 v2026.8.18 已自带 3.53.4，无需编译）
+# 步骤 27: huashu-design 导出工具链（node 全局）
+# 供 huashu-design skill 的 scripts/ 调用：
+#   render-video.js / html2pptx.js → playwright + sharp
+#   export_deck_pptx.mjs          → pptxgenjs
+#   export_deck_pdf.mjs           → pdf-lib
+# scripts/ 以 `require('playwright')` 方式加载，故必须装到全局 node_modules
+# 并用 NODE_PATH 指向全局，否则 skill 运行时 require 找不到。
+# ============================================
+ENV NODE_PATH=/usr/lib/node_modules
+RUN npm install -g playwright pptxgenjs sharp pdf-lib && \
+    echo "=== Installing Chromium for node playwright ===" && \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright \
+    PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright \
+    npx playwright install chromium || \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright \
+    PLAYWRIGHT_DOWNLOAD_HOST=https://registry.npmmirror.com/-/binary/playwright \
+    npx playwright install chromium || \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright \
+    npx playwright install chromium
+
+# ============================================
+# 步骤 28: 验证 SQLite（基础镜像 v2026.8.18 已自带 3.53.4，无需编译）
 # ⚠️ 2026-08-20 修正：原步骤编译 3.53.4 反而降级，已删除（含 COPY tarball）
 # ============================================
 COPY sqlite-autoconf-3530400.tar.gz /tmp/
@@ -262,7 +285,7 @@ RUN set -eu; \
     rm -rf /tmp/sqlite-autoconf-*
 
 # ============================================
-# 步骤 21: 编译 CJK 分词扩展（装到镜像内 /usr/local/lib，避开 .hermes 卷遮蔽）
+# 步骤 30: 编译 CJK 分词扩展（装到镜像内 /usr/local/lib，避开 .hermes 卷遮蔽）
 # ⚠️ 2026-08-20 修正：原装到 /home/agent/.hermes/lib 会被 hermes_data_volume 遮蔽，
 #    每次重建镜像后运行时仍加载卷里旧版。改为镜像内路径 + compose 设置
 #    HERMES_FTS5_CJK_SO=/usr/local/lib/libfts5_cjk.so（源码原生支持，见 hermes_state.py），
