@@ -804,7 +804,7 @@ services:
       --embedding
       --pooling mean
       -ngl 0
-      -t 4
+      -t 8
       -c 2048
       -ub 2048
 #      --log-format json
