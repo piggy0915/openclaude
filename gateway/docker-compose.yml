@@ -57,6 +57,29 @@ services:
           cpus: '0.3'
           memory: 512M
 
+
+  # ============================================================
+  # Dify 限流网关 - 独立 nginx，平滑多窗口并发峰值
+  # ============================================================
+  dify-limiter:
+    image: nginx:1.29.2-alpine3.22-slim
+    container_name: dify-limiter
+    restart: unless-stopped
+    volumes:
+      - ./data/dify/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8090:8090"
+    networks:
+      - rag-network
+    depends_on:
+      - dify-api
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+
+
   sandbox:
     image: langgenius/dify-sandbox:main
     container_name: sandbox
@@ -239,7 +262,7 @@ services:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: 1G
 
 
   dify-worker_beat:
@@ -352,34 +375,34 @@ services:
   # ============================================================
   # Coze 适配器 - 将 Coze 请求转换为 Hermes API
   # ============================================================
-  coze-adapter:
-    image: python:3.14-slim
-    container_name: coze-adapter
-    restart: unless-stopped
-    env_file:
-      - ./config/.env
-    ports:
-      - "8081:8081"                          # Coze 调用的入口
-    volumes:
-      - ./scripts/coze-adapter.py:/app/main.py:ro
-    environment:
-      - HERMES_API_URL=http://hermes:8642
-      - API_SERVER_KEY=${API_SERVER_KEY:-sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V}
-
-    command: >
-      bash -c "
-        pip install fastapi uvicorn httpx &&
-        python /app/main.py
-      "
-    networks:
-      - rag-network
-    depends_on:
-      - hermes
-    deploy:
-      resources:
-        limits:
-          cpus: '0.3'
-          memory: 256M
+#  coze-adapter:
+#    image: python:3.14-slim
+#    container_name: coze-adapter
+#    restart: unless-stopped
+#    env_file:
+#      - ./config/.env
+#    ports:
+#      - "8081:8081"                          # Coze 调用的入口
+#    volumes:
+#      - ./scripts/coze-adapter.py:/app/main.py:ro
+#    environment:
+#      - HERMES_API_URL=http://hermes:8642
+#      - API_SERVER_KEY=${API_SERVER_KEY:-sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V}
+#
+#    command: >
+#      bash -c "
+#        pip install fastapi uvicorn httpx &&
+#        python /app/main.py
+#      "
+#    networks:
+#      - rag-network
+#    depends_on:
+#      - hermes
+#    deploy:
+#      resources:
+#        limits:
+#          cpus: '0.3'
+#          memory: 256M
 
   nginx-obsidian:
     image: nginx:1.29.2-alpine3.22-slim
@@ -804,7 +827,7 @@ services:
       --embedding
       --pooling mean
       -ngl 0
-      -t 8
+      -t 4
       -c 2048
       -ub 2048
 #      --log-format json
@@ -821,7 +844,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'      # Ultra9 多核优势，给足6核提速
+          cpus: '4.0'      # Ultra9 多核优势，给足4核提速
           memory: 6G
         reservations:
           cpus: '1.0'
@@ -846,7 +869,7 @@ services:
       --host 0.0.0.0
       --port 8000
       -ngl 0
-      -t 8
+      -t 4
       -c 2048
       -ub 2048
 #      --log-format json
@@ -863,7 +886,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'         # Rerank 计算量略小于 embedding
+          cpus: '2.0'         # Rerank 计算量略小于 embedding
           memory: 4G
         reservations:
           cpus: '0.5'      # Rerank 计算量略小于 embedding

@@ -96,10 +96,10 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
     -e /opt/hermes \
     'qdrant-client>=1.18.0' \
     'psycopg[binary]>=3.2.0' \
-    'lark-oapi==1.6.8' \
-    'qrcode==7.4.2' \
-    'dingtalk-stream==0.24.3' \
-    'alibabacloud-dingtalk==2.2.49' \
+    'lark-oapi>=1.6.8' \
+    'qrcode>=7.4.2' \
+    'dingtalk-stream>=0.24.3' \
+    'alibabacloud-dingtalk>=2.2.49' \
     'playwright>=1.61.0' \
     'websocket-client>=1.8.0'
 
@@ -285,7 +285,78 @@ RUN set -eu; \
     rm -rf /tmp/sqlite-autoconf-*
 
 # ============================================
-# 步骤 30: 编译 CJK 分词扩展（装到镜像内 /usr/local/lib，避开 .hermes 卷遮蔽）
+# 步骤 30: 修复 Hermes Provider 刷新问题
+# ============================================
+
+# 2. 创建 ~/.local/bin 软链接，解决 hermes 命令找不到的问题
+RUN mkdir -p /home/agent/.local/bin && \
+    ln -sf /opt/hermes/.venv/bin/hermes /home/agent/.local/bin/hermes && \
+    # 确保 PATH 包含该目录
+    echo 'export PATH=/home/agent/.local/bin:$PATH' >> /home/agent/.bashrc
+
+# 3. 清理并重建 state.db（解决 disk I/O error）
+RUN cd /home/agent/.hermes && \
+    # 备份旧的（如果有）
+    (mv state.db state.db.bak.$(date +%Y%m%d) 2>/dev/null || true) && \
+    # 删除所有相关文件
+    rm -f state.db state.db-shm state.db-wal && \
+    # 用 hermes 重新初始化数据库（必须在 venv 激活状态下）
+    /opt/hermes/.venv/bin/python3 -c "from hermes.db import init_db; init_db()" 2>/dev/null || \
+    # 如果上面不行，用 hermes 命令
+    /home/agent/.local/bin/hermes db init 2>/dev/null || \
+    echo "⚠️ DB init skipped (will be done at runtime)"
+
+# 4. 升级配置版本（v38 → v39）
+RUN /home/agent/.local/bin/hermes config upgrade 2>/dev/null || true
+
+# 5. 环境变量：修复 Python 和 Playwright 路径（防止在容器内找不到）
+ENV PATH="/home/agent/.local/bin:${PATH}"
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
+
+# 删除 ENV PYTHONPATH 那行，改用 RUN 在 shell 中设置
+RUN echo 'export PYTHONPATH="/opt/hermes${PYTHONPATH:+:${PYTHONPATH}}"' >> /etc/profile.d/hermes.sh && \
+    echo 'export PYTHONPATH="/opt/hermes${PYTHONPATH:+:${PYTHONPATH}}"' >> /home/agent/.bashrc
+
+# 6. 创建启动脚本，每次容器启动时自动修复
+RUN echo '#!/bin/bash\n\
+# === Hermes Provider 修复脚本 ===\n\
+\n\
+# 修复 DNS（容器每次启动可能被重置）\n\
+echo "nameserver 223.5.5.5" > /etc/resolv.conf\n\
+echo "nameserver 8.8.8.8" >> /etc/resolv.conf\n\
+\n\
+# 确保软链接存在\n\
+mkdir -p /home/agent/.local/bin\n\
+ln -sf /opt/hermes/.venv/bin/hermes /home/agent/.local/bin/hermes\n\
+\n\
+# 修复 state.db（如果有锁或损坏）\n\
+cd /home/agent/.hermes\n\
+if [ -f state.db ]; then\n\
+    # 检查 DB 是否正常\n\
+    if ! /opt/hermes/.venv/bin/python3 -c "import sqlite3; sqlite3.connect(\"state.db\").cursor().execute(\"SELECT 1\")" 2>/dev/null; then\n\
+        echo "⚠️ state.db corrupted, rebuilding..."\n\
+        rm -f state.db state.db-shm state.db-wal\n\
+        /home/agent/.local/bin/hermes db init 2>/dev/null || true\n\
+    fi\n\
+else\n\
+    /home/agent/.local/bin/hermes db init 2>/dev/null || true\n\
+fi\n\
+\n\
+# 升级配置（如果还没升级）\n\
+/home/agent/.local/bin/hermes config upgrade 2>/dev/null || true\n\
+\n\
+# 执行原始命令\n\
+exec "$@"\n\
+' > /usr/local/bin/hermes-fix.sh && chmod +x /usr/local/bin/hermes-fix.sh
+
+# 7. 设置 entrypoint 为修复脚本（保留原 CMD）
+ENTRYPOINT ["/usr/local/bin/hermes-fix.sh"]
+# 注意：原 Dockerfile 底部有注释说明 CMD 被遮蔽，这里保留原 CMD 不变
+# 如果原镜像有 CMD，会被 ENTRYPOINT 透传执行
+
+
+# ============================================
+# 步骤 35: 编译 CJK 分词扩展（装到镜像内 /usr/local/lib，避开 .hermes 卷遮蔽）
 # ⚠️ 2026-08-20 修正：原装到 /home/agent/.hermes/lib 会被 hermes_data_volume 遮蔽，
 #    每次重建镜像后运行时仍加载卷里旧版。改为镜像内路径 + compose 设置
 #    HERMES_FTS5_CJK_SO=/usr/local/lib/libfts5_cjk.so（源码原生支持，见 hermes_state.py），
@@ -294,6 +365,38 @@ RUN set -eu; \
 RUN cd /opt/hermes/native/fts5_cjk && \
     gcc -shared -fPIC -O2 -Wall -I/usr/local/include fts5_cjk.c -o libfts5_cjk.so && \
     install -m 0644 libfts5_cjk.so /usr/local/lib/libfts5_cjk.so
+
+# ============================================
+# 步骤 36: book-to-skill（2026-08-28 固化；未上 PyPI，源码 COPY 安装）
+# 纯本地规则提取引擎（无 LLM/网络调用），依赖走清华 PyPI 源
+# ============================================
+COPY book-to-skill/ /opt/book-to-skill/
+RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    '/opt/book-to-skill[pdf,epub,docx,html,rtf]'
+
+# ============================================
+# 步骤 38: archify（2026-08-28 固化；Node CLI 零依赖，JSON-IR → 自包含 HTML）
+# 装镜像内 /opt/archify（/home/agent/.hermes 被卷遮蔽，SKILL.md 走 Gitee skills 同步）
+# ============================================
+COPY archify-src/archify/ /opt/archify/
+RUN ln -sf /opt/archify/bin/archify.mjs /usr/local/bin/archify && \
+    chmod +x /opt/archify/bin/archify.mjs
+
+# ============================================
+# 步骤 40: AI-Video-Transcriber（MCP 工具）
+# ⚠️ 2026-08-28 修正：hf-mirror 对 faster-whisper-base 报 401（xethub CAS 存储不兼容），
+#    改为构建时 COPY 已下载的模型进镜像（零网络依赖），运行时 HF_HOME 直接命中缓存。
+# ============================================
+COPY ai-video-transcriber/ /opt/ai-video-transcriber/
+COPY whisper-model/ /opt/hermes/.whisper/
+
+RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    'yt-dlp>=2024.12.13' \
+    'faster-whisper>=1.1.0'
+
+ENV HF_HOME=/opt/hermes/.whisper
 
 # ============================================
 # 启动命令（2026-08-20 修正：容器实际入口是挂载的 /home/agent/scripts/entrypoint.sh，

@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """
-Obsidian 笔记自动同步到 Qdrant 向量数据库
-监听 /knowledge_base/obsidian 下 .md 文件变化，直接写入 Qdrant
+Obsidian 笔记自动同步到 Qdrant（watchdog 实时版）
+================================================
+与手动全量版 scripts/sync_obsidian_to_qdrant.sh **共享同一套规则**：
+  - point_id = uuid5(rel#idx)        （与 shell 版一致，幂等互认）
+  - 切片 350 字                       （bge 512 token 硬限）
+  - embedding 端点 /v1/embeddings    （OpenAI 兼容，llama.cpp）
+  - 排除 .obsidian / awesome-design-md / temp
+  - payload 带 domain 字段            （多业务隔离）
+
+开关：WATCHDOG_ENABLED=0 时只做初始全量同步后退出（相当于一次性同步）；
+      默认 1 = 常驻监听。手动全量重建用 shell 版，两套共用 id 规则不冲突。
 """
 import os
 import time
 import json
 import logging
-import hashlib
+import uuid
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -21,10 +30,34 @@ logger = logging.getLogger(__name__)
 VAULT_PATH = os.environ.get('OBSIDIAN_VAULT_PATH', '/knowledge_base/obsidian')
 QDRANT_HOST = os.environ.get('QDRANT_HOST', 'qdrant')
 QDRANT_PORT = os.environ.get('QDRANT_PORT', '6333')
-QDRANT_COLLECTION = os.environ.get('QDRANT_COLLECTION', 'hermes_knowledge')
+QDRANT_COLLECTION = os.environ.get('QDRANT_COLLECTION', 'hermes_memory')
 QDRANT_API_KEY = os.environ.get('QDRANT_API_KEY', '')
-EMBEDDING_URL = os.environ.get('EMBEDDING_URL', 'http://embedding-llama:8000/embedding')
-MAX_CHARS = 500  # bge-large-zh 约 512 token
+EMBEDDING_URL = os.environ.get('EMBEDDING_URL', 'http://embedding-llama:8000/v1/embeddings')
+EMBEDDING_MODEL = os.environ.get('EMBEDDING_MODEL', 'bge-large-zh-v1.5')
+CHUNK_SIZE = int(os.environ.get('CHUNK_SIZE', '350'))   # bge 512 token ~380 中文字，取 350 安全
+WATCHDOG_ENABLED = os.environ.get('WATCHDOG_ENABLED', '1') == '1'
+EXCLUDE_PATTERNS = ('.obsidian', 'awesome-design-md', '/temp/', '/archive/')
+
+
+def domain_for(rel: str) -> str:
+    nqms_kw = ('nqms', '评价', '质量', '装备', '业务架构')
+    # rel 形如 knowledge/concepts/x.md（relative_to VAULT_PATH 后仍带 knowledge/ 前缀）
+    # 先去掉 knowledge/ 前缀再判断
+    p = rel[10:] if rel.startswith('knowledge/') else rel
+    # concepts/entities 是业务知识层：NQMS 库内的概念/实体页默认 nqms
+    if p.startswith('concepts/') or p.startswith('entities/'):
+        return 'nqms'
+    # raw/doc 官方文档：按文件名关键字
+    if p.startswith('raw/doc/'):
+        return 'nqms' if any(k in p for k in nqms_kw) else 'general'
+    # raw/web 剪藏：按文件名关键字
+    if p.startswith('raw/web/'):
+        return 'nqms' if any(k in p for k in nqms_kw) else 'general'
+    return 'general'
+
+
+def should_skip(rel: str) -> bool:
+    return any(p in rel for p in EXCLUDE_PATTERNS)
 
 
 class QdrantSyncHandler(FileSystemEventHandler):
@@ -32,14 +65,12 @@ class QdrantSyncHandler(FileSystemEventHandler):
         self.processed = {}
 
     def get_embedding(self, text):
-        if len(text) > MAX_CHARS:
-            text = text[:MAX_CHARS]
-        payload = json.dumps({"content": text}).encode()
+        payload = json.dumps({"model": EMBEDDING_MODEL, "input": text}).encode()
         req = urllib.request.Request(EMBEDDING_URL, data=payload,
                                      headers={"Content-Type": "application/json"})
-        resp = urllib.request.urlopen(req, timeout=30)
+        resp = urllib.request.urlopen(req, timeout=60)
         data = json.loads(resp.read())
-        return data[0]["embedding"][0]
+        return data["data"][0]["embedding"]
 
     def qdrant_request(self, method, path, body=None):
         url = f"http://{QDRANT_HOST}:{QDRANT_PORT}{path}"
@@ -49,7 +80,7 @@ class QdrantSyncHandler(FileSystemEventHandler):
                                               "api-key": QDRANT_API_KEY},
                                      method=method)
         try:
-            resp = urllib.request.urlopen(req, timeout=10)
+            resp = urllib.request.urlopen(req, timeout=30)
             return json.loads(resp.read())
         except urllib.error.HTTPError as e:
             return {"error": e.code, "detail": e.read().decode()[:200]}
@@ -59,46 +90,58 @@ class QdrantSyncHandler(FileSystemEventHandler):
             return
         if not filepath.endswith('.md'):
             return
-
+        rel_path = str(Path(filepath).relative_to(VAULT_PATH))
+        if should_skip(rel_path):
+            return
         with open(filepath, 'rb') as f:
-            cur_hash = hashlib.md5(f.read()).hexdigest()
+            cur_hash = self._md5(f.read())
         if filepath in self.processed and self.processed[filepath] == cur_hash:
             return
         self.processed[filepath] = cur_hash
-
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
         if not content.strip():
             return
-
-        rel_path = str(Path(filepath).relative_to(VAULT_PATH))
         title = Path(filepath).stem
-        point_id = hashlib.md5(rel_path.encode()).hexdigest()
+        chunks = [content[i:i + CHUNK_SIZE] for i in range(0, len(content), CHUNK_SIZE)]
+        total = len(chunks)
+        domain = domain_for(rel_path)
+        for idx, chunk in enumerate(chunks):
+            if not chunk.strip():
+                continue
+            try:
+                vec = self.get_embedding(chunk)
+            except Exception as e:
+                logger.error(f"Embedding error {rel_path}#{idx}: {e}")
+                continue
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{rel_path}#{idx}"))
+            body = {
+                "points": [{
+                    "id": point_id,
+                    "vector": vec,
+                    "payload": {
+                        "path": rel_path,
+                        "title": title,
+                        "text": chunk,
+                        "source": "obsidian",
+                        "kind": "wiki",
+                        "chunk": idx,
+                        "total": total,
+                        "domain": domain,
+                        "modified": datetime.now().isoformat()
+                    }
+                }]
+            }
+            result = self.qdrant_request("PUT", f"/collections/{QDRANT_COLLECTION}/points", body)
+            if "error" in result:
+                logger.error(f"Qdrant error {rel_path}#{idx}: {result}")
+            else:
+                logger.info(f"Synced: {rel_path}#{idx} (domain={domain})")
 
-        try:
-            vec = self.get_embedding(content)
-        except Exception as e:
-            logger.error(f"Embedding error {rel_path}: {e}")
-            return
-
-        body = {
-            "points": [{
-                "id": point_id,
-                "vector": vec,
-                "payload": {
-                    "path": rel_path,
-                    "title": title,
-                    "content": content[:5000],
-                    "source": "obsidian",
-                    "modified": datetime.now().isoformat()
-                }
-            }]
-        }
-        result = self.qdrant_request("PUT", f"/collections/{QDRANT_COLLECTION}/points", body)
-        if "error" in result:
-            logger.error(f"Qdrant error {rel_path}: {result}")
-        else:
-            logger.info(f"Synced: {rel_path}")
+    @staticmethod
+    def _md5(data):
+        import hashlib
+        return hashlib.md5(data).hexdigest()
 
     def on_modified(self, event):
         if not event.is_directory and event.src_path.endswith('.md'):
@@ -114,9 +157,9 @@ class QdrantSyncHandler(FileSystemEventHandler):
         if not event.is_directory and event.src_path.endswith('.md'):
             try:
                 rel = str(Path(event.src_path).relative_to(VAULT_PATH))
-                pid = hashlib.md5(rel.encode()).hexdigest()
-                self.qdrant_request("POST", f"/collections/{QDRANT_COLLECTION}/points/delete",
-                                    {"points": [pid]})
+                # 删除该文件全部 chunk：按 path 精确过滤（Qdrant filter 是精确匹配）
+                body = {"filter": {"must": [{"key": "path", "match": {"value": rel}}]}}
+                self.qdrant_request("POST", f"/collections/{QDRANT_COLLECTION}/points/delete", body)
                 logger.info(f"Deleted: {rel}")
             except Exception:
                 pass
@@ -132,26 +175,22 @@ def ensure_collection():
     except urllib.error.HTTPError:
         pass
 
-    # Get dim from first file
     sample = None
     for f in Path(VAULT_PATH).rglob('*.md'):
-        if '.obsidian' not in str(f):
-            sample = f.read_text(encoding='utf-8')[:MAX_CHARS]
+        if not should_skip(str(f.relative_to(VAULT_PATH))):
+            sample = f.read_text(encoding='utf-8')[:CHUNK_SIZE]
             break
     if not sample:
         return
 
-    payload = json.dumps({"content": sample}).encode()
+    payload = json.dumps({"model": EMBEDDING_MODEL, "input": sample}).encode()
     req = urllib.request.Request(EMBEDDING_URL, data=payload,
                                  headers={"Content-Type": "application/json"})
-    resp = urllib.request.urlopen(req, timeout=30)
-    vec = json.loads(resp.read())[0]["embedding"][0]
+    resp = urllib.request.urlopen(req, timeout=60)
+    vec = json.loads(resp.read())["data"][0]["embedding"]
     dim = len(vec)
 
-    body = {
-        "name": QDRANT_COLLECTION,
-        "vectors": {"size": dim, "distance": "Cosine"}
-    }
+    body = {"name": QDRANT_COLLECTION, "vectors": {"size": dim, "distance": "Cosine"}}
     req = urllib.request.Request(
         f"http://{QDRANT_HOST}:{QDRANT_PORT}/collections",
         data=json.dumps(body).encode(),
@@ -168,6 +207,7 @@ def main():
     logger.info(f"Watching: {VAULT_PATH}")
     logger.info(f"Qdrant: {QDRANT_HOST}:{QDRANT_PORT}/{QDRANT_COLLECTION}")
     logger.info(f"Embedding: {EMBEDDING_URL}")
+    logger.info(f"WATCHDOG_ENABLED={WATCHDOG_ENABLED} CHUNK_SIZE={CHUNK_SIZE}")
 
     if not os.path.exists(VAULT_PATH):
         logger.error(f"Vault path not found: {VAULT_PATH}")
@@ -179,10 +219,15 @@ def main():
     handler = QdrantSyncHandler()
     count = 0
     for f in sorted(Path(VAULT_PATH).rglob("*.md")):
-        if ".obsidian" not in str(f):
+        rel = str(f.relative_to(VAULT_PATH))
+        if not should_skip(rel):
             handler.sync_file(str(f))
             count += 1
     logger.info(f"Initial sync done ({count} files)")
+
+    if not WATCHDOG_ENABLED:
+        logger.info("WATCHDOG_ENABLED=0: one-shot sync complete, exiting")
+        return
 
     observer = Observer()
     observer.schedule(handler, VAULT_PATH, recursive=True)
