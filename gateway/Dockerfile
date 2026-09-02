@@ -90,6 +90,8 @@ RUN /opt/hermes/.venv/bin/pip install \
     --no-cache-dir \
     -e /opt/hermes \
     'firecrawl-py>=4.37.0'
+# lazy_deps edge-tts pin 固化：镜像层直接 7.2.8，消除启动 lazy-refresh 竞态（2026-09-01）
+RUN sed -i 's/edge-tts==7\.2\.7/edge-tts==7.2.8/g' /opt/hermes/tools/lazy_deps.py && grep -q 'edge-tts==7.2.8' /opt/hermes/tools/lazy_deps.py && echo "lazy_deps pin 固化 7.2.8"
 
 RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
     --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
@@ -126,7 +128,30 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
     'Pillow>=10.0.0' \
     'lxml>=5.0.0' \
     'pandas>=2.0.0' \
-    'xlsxwriter>=3.1.0'
+    'xlsxwriter>=3.1.0' \
+    'edge-tts>=7.2.8'
+RUN python3 - <<'PY'
+p = "/opt/hermes/tools/tts_tool.py"
+s = open(p, encoding="utf-8").read()
+old = '''def _import_edge_tts():
+    """Lazy import edge_tts. Returns the module or raises ImportError."""
+    try:
+        from tools.lazy_deps import ensure as _lazy_ensure
+        _lazy_ensure("tts.edge", prompt=False)
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    import edge_tts
+    return edge_tts'''
+new = '''def _import_edge_tts():
+    """Lazy import edge_tts. Returns the module or raises ImportError."""
+    import edge_tts
+    return edge_tts'''
+assert old in s, "tts_tool.py 结构不符，请检查"
+open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+print("✓ tts_tool._import_edge_tts 已移除 lazy_ensure")
+PY
 
 # ============================================
 # 步骤 15: 安装并升级 npm
@@ -139,7 +164,7 @@ RUN npm --version || apt-get install -y npm && \
 # ============================================
 # 步骤 16: 安装全局 npm 工具
 # ============================================
-RUN npm install -g @gitlawb/openclaude@latest reasonix@latest @firecrawl/anydoc && \
+RUN npm install -g @gitlawb/openclaude@latest reasonix@latest @firecrawl/anydoc @marp-team/marp-cli && \
     openclaude --version && \
     reasonix --version
 
@@ -233,11 +258,7 @@ RUN npm i -g @colbymchenry/codegraph && \
 # ============================================
 # 步骤 26: 安装其他 MCP 包
 # ============================================
-RUN npm install -g ppt-mcp@2.0.0 @upstash/context7-mcp@4.0.2 @drawio/mcp@1.3.2 && \
-    test -f /usr/lib/node_modules/ppt-mcp/build/index.js && \
-    test -f /usr/lib/node_modules/@upstash/context7-mcp/dist/index.js && \
-    test -f /usr/lib/node_modules/@drawio/mcp/src/index.js && \
-    echo "OK: MCP packages installed" || { echo "FAIL: MCP packages"; exit 1; }
+
 
 # ============================================
 # 步骤 27: huashu-design 导出工具链（node 全局）
