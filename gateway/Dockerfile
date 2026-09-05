@@ -130,28 +130,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
     'pandas>=2.0.0' \
     'xlsxwriter>=3.1.0' \
     'edge-tts>=7.2.8'
-RUN python3 - <<'PY'
-p = "/opt/hermes/tools/tts_tool.py"
-s = open(p, encoding="utf-8").read()
-old = '''def _import_edge_tts():
-    """Lazy import edge_tts. Returns the module or raises ImportError."""
-    try:
-        from tools.lazy_deps import ensure as _lazy_ensure
-        _lazy_ensure("tts.edge", prompt=False)
-    except ImportError:
-        pass
-    except Exception:
-        pass
-    import edge_tts
-    return edge_tts'''
-new = '''def _import_edge_tts():
-    """Lazy import edge_tts. Returns the module or raises ImportError."""
-    import edge_tts
-    return edge_tts'''
-assert old in s, "tts_tool.py 结构不符，请检查"
-open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
-print("✓ tts_tool._import_edge_tts 已移除 lazy_ensure")
-PY
+
 
 # ============================================
 # 步骤 15: 安装并升级 npm
@@ -164,8 +143,9 @@ RUN npm --version || apt-get install -y npm && \
 # ============================================
 # 步骤 16: 安装全局 npm 工具
 # ============================================
-RUN npm install -g @gitlawb/openclaude@latest reasonix@latest @firecrawl/anydoc @marp-team/marp-cli && \
+RUN npm install -g @gitlawb/openclaude@latest reasonix@latest @firecrawl/anydoc @marp-team/marp-cli chrome-devtools-mcp && \
     openclaude --version && \
+    chrome-devtools-mcp --version && \
     reasonix --version
 
 # ============================================
@@ -176,8 +156,8 @@ RUN npm cache clean --force && \
     ln -sf /usr/bin/node /usr/local/bin/node && \
     ln -sf /usr/bin/npm /usr/local/bin/npm && \
     ln -sf /usr/bin/npx /usr/local/bin/npx && \
-    ln -sf /usr/lib/node_modules/.bin/openclaude /usr/local/bin/openclaude && \
-    ln -sf /usr/lib/node_modules/.bin/reasonix /usr/local/bin/reasonix
+    ln -sf /usr/bin/openclaude /usr/local/bin/openclaude && \
+    ln -sf /usr/bin/reasonix /usr/local/bin/reasonix
 
 # ============================================
 # 步骤 18: 安装 Playwright Chromium（备用镜像）
