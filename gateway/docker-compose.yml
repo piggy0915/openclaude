@@ -918,6 +918,52 @@ services:
 #      - /docker/elk/elasticsearch/logs:/usr/share/elasticsearch/logs
 
 
+  # ---------- 独立工具服务（原 docker run，2026-09-06 并入 compose 统一管理） ----------
+
+  # DeepTutor - 天津高二自学平台（数据卷保留原 docker volume deeptutor-data）
+  deeptutor:
+    image: ghcr.io/hkuds/deeptutor:latest
+    container_name: deeptutor
+    restart: unless-stopped
+    ports:
+      - "3782:3782"      # DeepTutor Web
+    volumes:
+      - deeptutor_data_volume:/app/data
+    networks:
+      - rag-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'         # Rerank 计算量略小于 embedding
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Next AI Draw.io - AI 画图工作台（env_file 含 DeepSeek key，600 权限，勿动）
+  next-ai-drawio:
+    image: ghcr.io/dayuanjiang/next-ai-draw-io:latest
+    container_name: next-ai-drawio
+    restart: unless-stopped
+    ports:
+      - "3020:3000"      # 宿主 3000 被 obsidian 占用
+    env_file:
+      - ./config/.env
+    networks:
+      - rag-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'         # Rerank 计算量略小于 embedding
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   opt_data_volume:
     name: opt_data
@@ -1010,6 +1056,14 @@ volumes:
       type: none
       device: ${PWD}/data/dify
       o: bind
+  deeptutor_data_volume:
+    name: deeptutor_data_data
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/data/deeptutor
+      o: bind
+
 # ============================================================
 # 网络配置
 # ============================================================
