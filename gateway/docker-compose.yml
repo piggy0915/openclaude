@@ -920,7 +920,7 @@ services:
 
   # ---------- 独立工具服务（原 docker run，2026-09-06 并入 compose 统一管理） ----------
 
-  # DeepTutor - 天津高二自学平台（数据卷保留原 docker volume deeptutor-data）
+  # DeepTutor - 天津高二自学平台（数据已迁移至宿主 bind ./data/deeptutor，原 docker volume deeptutor-data 留存备份）
   deeptutor:
     image: ghcr.io/hkuds/deeptutor:latest
     container_name: deeptutor
@@ -934,7 +934,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'         # Rerank 计算量略小于 embedding
+          cpus: '1.0'         # 资源上限防失控
           memory: 1G
     logging:
       driver: "json-file"
@@ -942,7 +942,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # Next AI Draw.io - AI 画图工作台（env_file 含 DeepSeek key，600 权限，勿动）
+  # Next AI Draw.io - AI 画图工作台（secrets 统一走 config/.env，与其他服务一致）
   next-ai-drawio:
     image: ghcr.io/dayuanjiang/next-ai-draw-io:latest
     container_name: next-ai-drawio
@@ -951,12 +951,15 @@ services:
       - "3020:3000"      # 宿主 3000 被 obsidian 占用
     env_file:
       - ./config/.env
+    environment:
+      - PORT=3000          # 覆盖 config/.env 的 PORT=6060（webui 用），本服务固定内网 3000
+      - HOSTNAME=0.0.0.0
     networks:
       - rag-network
     deploy:
       resources:
         limits:
-          cpus: '1.0'         # Rerank 计算量略小于 embedding
+          cpus: '1.0'         # 资源上限防失控
           memory: 1G
     logging:
       driver: "json-file"
