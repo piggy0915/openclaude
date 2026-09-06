@@ -632,7 +632,8 @@ services:
       - app_volume:/app:ro
 #      - openclaude_volume:/root/.openclaude
       - ./config/.env:/home/agent/.env
-      - ./config/config.yaml:/home/agent/config.yaml
+      # DEAD-CONFIG 2026-09-05: 从未被 Hermes 加载(HERMES_HOME=/home/agent/.hermes/config.yaml 生效)；5个enabled MCP 进程全没跑为铁证。
+      # - ./config/config.yaml:/home/agent/config.yaml
       - ./config/openclaude/.openclaude.json:/root/.openclaude.json:rw
       - ./config/openclaude/settings.json:/root/.openclaude/settings.json:rw
 
