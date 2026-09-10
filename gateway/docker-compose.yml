@@ -606,6 +606,7 @@ services:
   # Hermes - AI Agent
   # ============================================================
   hermes:
+    stop_grace_period: 30s
     image: hermes-agent:main
 #    image: hermes-agent:v2026.8.18
     container_name: hermes
@@ -629,7 +630,7 @@ services:
 #      - ./data/obsidian/knowledge:/knowledge_base/obsidian:rw
 
       - opt_data_volume:/opt/data:rw
-#      - app_volume:/app:rw
+      - app_volume:/app:rw
 #      - openclaude_volume:/root/.openclaude
       - ./config/.env:/home/agent/.env
       # DEAD-CONFIG 2026-09-05: 从未被 Hermes 加载(HERMES_HOME=/home/agent/.hermes/config.yaml 生效)；5个enabled MCP 进程全没跑为铁证。

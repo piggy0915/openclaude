@@ -67,7 +67,11 @@ RUN apt-get update && \
         libxkbcommon0 \
         libgbm1 \
         libasound2 \
-        ffmpeg
+        ffmpeg \
+        dbus \
+        libgtk-3-0 \
+        libasound2 \
+        libatk-bridge2.0-0
 
 # ============================================
 # 步骤 8: 安装 Node.js 24
@@ -147,6 +151,26 @@ RUN npm install -g @gitlawb/openclaude@latest reasonix@latest @firecrawl/anydoc 
     openclaude --version && \
     chrome-devtools-mcp --version && \
     reasonix --version
+
+# ============================================
+# 步骤: 打包 agent-browser CLI（browser_exec 后端，2026 固化）
+# 避免运行时 npx 惰性解析（#43564 起 agent-browser 不在 root 依赖里）
+# ============================================
+# 1) 补 Chromium 运行时缺失的系统库
+
+# 2) npm 全局装 agent-browser（它 postinstall 会把全局 symlink 指向本地二进制）
+RUN npm install -g agent-browser && \
+    agent-browser --version
+
+# 3) 关键：让 Hermes 能找到。全局 bin 在 /usr/bin（npm prefix /usr），
+#    确认 PATH 命中 /usr/local/bin:/usr/bin
+ENV NODE_PATH=/usr/lib/node_modules
+
+# 4) 用现成 Chromium（/opt/hermes/.playwright）初始化 agent-browser，
+#    省得它再下一份浏览器
+RUN PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright \
+    agent-browser install --no-deps 2>/dev/null || true
+
 
 # ============================================
 # 步骤 17: 清理 npm 缓存并创建符号链接

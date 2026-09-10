@@ -122,6 +122,7 @@ else
     echo "⚠ AGENTCHAT_CHROME_CDP not set — CDP Chrome disabled"
 fi
 
+export PATH="/home/agent/.local/bin:$PATH"
 # ── 最终启动：使用 start-studio-all.sh ──
 echo "=== Starting Hermes Studio ==="
 if [ -f "/app/bin/start-studio-all.sh" ] && [ "${HERMES_GATEWAY_MODE:-0}" != "1" ];  then
