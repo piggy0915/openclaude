@@ -118,7 +118,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
 RUN /opt/hermes/.venv/bin/pip install firecrawl-anydoc --index-url https://pypi.org/simple
 
 # ============================================
-# 步骤 14: 文档处理依赖（openpyxl/docx/pptx 等，2026-08-21 固化）
+# 步骤 15: 文档处理依赖（openpyxl/docx/pptx 等，2026-08-21 固化）
 # 注意：原临时安装写在容器可写层，容器重建即丢失（venv 在镜像内非持久卷）。
 # 统一在此固化，构建后无需再手动 uv pip install。
 # ============================================
@@ -137,7 +137,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
 
 
 # ============================================
-# 步骤 15: 安装并升级 npm
+# 步骤 16: 安装并升级 npm
 # ============================================
 RUN npm --version || apt-get install -y npm && \
     npm config set prefix /usr && \
@@ -145,7 +145,7 @@ RUN npm --version || apt-get install -y npm && \
     npm --version
 
 # ============================================
-# 步骤 16: 安装全局 npm 工具
+# 步骤 17: 安装全局 npm 工具
 # ============================================
 RUN npm install -g @gitlawb/openclaude@latest reasonix@latest @firecrawl/anydoc @marp-team/marp-cli chrome-devtools-mcp && \
     openclaude --version && \
