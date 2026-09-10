@@ -629,7 +629,7 @@ services:
 #      - ./data/obsidian/knowledge:/knowledge_base/obsidian:rw
 
       - opt_data_volume:/opt/data:rw
-      - app_volume:/app:ro
+#      - app_volume:/app:rw
 #      - openclaude_volume:/root/.openclaude
       - ./config/.env:/home/agent/.env
       # DEAD-CONFIG 2026-09-05: 从未被 Hermes 加载(HERMES_HOME=/home/agent/.hermes/config.yaml 生效)；5个enabled MCP 进程全没跑为铁证。
@@ -650,6 +650,7 @@ services:
       - XDG_DATA_HOME=/home/agent/.hermes
       - XDG_CACHE_HOME=/home/agent/.hermes
       - GATEWAY_ALLOW_ALL_USERS=true
+      - HERMES_GATEWAY_MODE=1  # 门控：有 app_volume 也不启动 studio，走 hermes gateway run
 
       # 2. (可选但推荐) 为了防止冲突，可以清除任何可能从宿主机继承的代理设置
       - HTTP_PROXY=
@@ -767,7 +768,7 @@ services:
       # ========== SSH 私钥挂载（建议只读） ==========
       - ssh_volume:/root/.ssh:ro
       - opt_data_volume:/opt/data:rw
-      - app_volume:/app:ro
+      - app_volume:/app:rw
 
     environment:
       - AGENT_ENDPOINT=http://hermes:8642  # WebUI连接Agent的地址
