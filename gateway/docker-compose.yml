@@ -653,6 +653,10 @@ services:
       - XDG_CACHE_HOME=/home/agent/.hermes
       - GATEWAY_ALLOW_ALL_USERS=true
       - HERMES_GATEWAY_MODE=1  # 门控：有 app_volume 也不启动 studio，走 hermes gateway run
+      # Ekko MCP 浏览器工具统一走基座 agent-browser（避免解析到缺失的 /app/node_modules）
+      - AGENT_BROWSER_BIN=/usr/local/bin/agent-browser
+      # Ekko MCP 固定走基座标准路径（与 webui 容器一致）
+      - HERMES_WEB_UI_MCP_BIN=/opt/ekko/bin/ekko-studio-mcp.mjs
 
       # 2. (可选但推荐) 为了防止冲突，可以清除任何可能从宿主机继承的代理设置
       - HTTP_PROXY=
@@ -780,6 +784,10 @@ services:
       - HERMES_WEB_UI_MANAGED_GATEWAY=0
       - HERMES_WEB_UI_DISABLE_GATEWAY_AUTOSTART=1
       - HERMES_GATEWAY_URL=http://hermes:8642
+      # Ekko MCP 固定走基座标准路径（两容器都有），避免注入 /app/bin（hermes 容器无 /app）
+      - HERMES_WEB_UI_MCP_BIN=/opt/ekko/bin/ekko-studio-mcp.mjs
+      # Ekko 浏览器工具使用统一 agent-browser（避免 /app/node_modules 里的旧 0.26）
+      - AGENT_BROWSER_BIN=/usr/local/bin/agent-browser
       - HERMES_WEB_UI_AUTH_JWT_EXPIRES_IN=${HERMES_WEB_UI_AUTH_JWT_EXPIRES_IN:-30d}
       - HERMES_WEB_UI_XAI_CALLBACK_BIND_HOST=0.0.0.0
       - HERMES_PATCH_SCRIPT=${HERMES_PATCH_SCRIPT:-}

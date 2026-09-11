@@ -64,6 +64,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libasound2 \
         dbus \
         libgtk-3-0 \
+        socat \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ============================================
@@ -182,6 +183,17 @@ RUN mkdir -p /opt/hermes/.playwright && \
         echo "Chromium not found"; ls -la /opt/hermes/.playwright/; exit 1; \
     fi && \
     ls -d /opt/hermes/.playwright/chromium-* 2>/dev/null
+
+# ============================================
+# 6.1) 清除上游基座残留的旧 Chromium revision（保持单一版本）
+# ============================================
+RUN CHROMIUM_REV=$(/opt/hermes/.venv/bin/python3 -c "import json,glob;print(next(b['revision'] for p in glob.glob('/opt/hermes/.venv/**/playwright/driver/package/browsers.json',recursive=True) for b in json.load(open(p))['browsers'] if b['name']=='chromium'))") && \
+    echo "expected chromium revision: $CHROMIUM_REV" && \
+    for d in /opt/hermes/.playwright/chromium-* /opt/hermes/.playwright/chromium_headless_shell-*; do \
+        [ -d "$d" ] || continue; \
+        case "$d" in *-"$CHROMIUM_REV") echo "keep $d" ;; *) echo "remove stale $d"; rm -rf "$d" ;; esac; \
+    done && \
+    ls -la /opt/hermes/.playwright/
 
 # ============================================
 # 7) Ekko Studio MCP（自包含单文件，两容器共用；不再依赖宿主 /app）

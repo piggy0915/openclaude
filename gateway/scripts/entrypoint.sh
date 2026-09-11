@@ -108,6 +108,15 @@ else
     echo "⚠ AGENTCHAT_CHROME_CDP not set — CDP Chrome disabled"
 fi
 
+# —— Ekko MCP 回连转发（2026-09-11）——
+# 共享 config.yaml 中 Ekko MCP 的 HERMES_WEB_UI_URL 固定 http://127.0.0.1:6060，
+# 而 6060 只在 hermes-webui 容器内监听；本容器用 socat 建本地回环转发，使 Ekko 工具同样可用。
+if command -v socat >/dev/null 2>&1 && ! grep -qi ':17AC' /proc/net/tcp 2>/dev/null; then
+    socat TCP-LISTEN:6060,bind=127.0.0.1,fork,reuseaddr TCP:hermes-webui:6060 >/tmp/socat-6060.log 2>&1 &
+    echo "✓ Ekko MCP 回连转发 127.0.0.1:6060 -> hermes-webui:6060 (PID $!)"
+else
+    echo "⚠ socat 转发跳过（socat 缺失或 6060 已监听）"
+fi
 export PATH="/home/agent/.local/bin:$PATH"
 # ── 最终启动 ──
 # 2026-09-11：/app 已从 hermes 容器移除（改由镜像提供，Ekko MCP 固化在 /opt/ekko/bin），
