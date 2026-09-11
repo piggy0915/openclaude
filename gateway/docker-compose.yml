@@ -630,7 +630,8 @@ services:
 #      - ./data/obsidian/knowledge:/knowledge_base/obsidian:rw
 
       - opt_data_volume:/opt/data:rw
-      - app_volume:/app:rw
+      # 2026-09-11 移除：/app 改由镜像提供；Ekko MCP 已固化 /opt/ekko/bin
+      # - app_volume:/app:rw
 #      - openclaude_volume:/root/.openclaude
       - ./config/.env:/home/agent/.env
       # DEAD-CONFIG 2026-09-05: 从未被 Hermes 加载(HERMES_HOME=/home/agent/.hermes/config.yaml 生效)；5个enabled MCP 进程全没跑为铁证。
@@ -744,6 +745,7 @@ services:
         max-file: "3"
 
   hermes-webui:
+    stop_grace_period: 30s
     image: ${WEBUI_IMAGE:-hermes-web-ui:0.7.19}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
 #    user: "${UID:-1000}:${GID:-1000}"
@@ -756,11 +758,8 @@ services:
     volumes:
 #      - hermes_node_modules_volume:/usr/lib/node_modules
       - hermes_data_volume:/home/agent/.hermes
-      - hermes_webui_data_volume:/home/agent/.hermes-web-ui
-
-      # 共享插件目录（只读）
-      - hermes_webui_plugins_volume:/home/agent/.hermes/plugins
-      - hermes_webui_skills_volume:/home/agent/.hermes/skills
+      - hermes_webui_data_volume:/home/agent/.hermes-webui
+      # 2026-09-11 移除：plugins/skills 是 .hermes 卷的子目录，嵌套挂载冗余
 #      - ${HERMES_CONFIG_DIR:-./config/hermes}/hermes.yaml:/home/agent/.hermes/config.yaml
 #      - ${HERMES_CONFIG_DIR:-./config/hermes}/config.yaml:/home/agent/config.yaml
 
@@ -769,14 +768,18 @@ services:
       # ========== SSH 私钥挂载（建议只读） ==========
       - ssh_volume:/root/.ssh:ro
       - opt_data_volume:/opt/data:rw
-      - app_volume:/app:rw
+      # 2026-09-11 移除：/app 改由镜像提供
+      # - app_volume:/app:rw
 
     environment:
-      - AGENT_ENDPOINT=http://hermes:8642  # WebUI连接Agent的地址
+      # 2026-09-11 移除：AGENT_ENDPOINT 是死配置（Ekko Studio 不读，全 /app 0 匹配）
       - PORT=${PORT:-6060}
       - HERMES_HOME=/home/agent/.hermes
       - HERMES_BIN=/opt/hermes/.venv/bin/hermes
-      - HERMES_WEB_UI_MANAGED_GATEWAY=1
+      # gateway 归属：由 hermes 容器持有，避免两容器抢同一 HERMES_HOME
+      - HERMES_WEB_UI_MANAGED_GATEWAY=0
+      - HERMES_WEB_UI_DISABLE_GATEWAY_AUTOSTART=1
+      - HERMES_GATEWAY_URL=http://hermes:8642
       - HERMES_WEB_UI_AUTH_JWT_EXPIRES_IN=${HERMES_WEB_UI_AUTH_JWT_EXPIRES_IN:-30d}
       - HERMES_WEB_UI_XAI_CALLBACK_BIND_HOST=0.0.0.0
       - HERMES_PATCH_SCRIPT=${HERMES_PATCH_SCRIPT:-}
@@ -805,8 +808,8 @@ services:
       - rag-network
     extra_hosts:
       - "host.docker.internal:host-gateway"
-#    depends_on:
-#      - hermes
+    depends_on:
+      - hermes
     deploy:
       resources:
         limits:
@@ -1010,20 +1013,21 @@ volumes:
       type: none
       device: ${PWD}/scripts
       o: bind
-  hermes_webui_plugins_volume:
-    name: hermes_webui_plugins
-    driver: local
-    driver_opts:
-      type: none
-      device: ${PWD}/data/hermes/plugins
-      o: bind
-  hermes_webui_skills_volume:
-    name: hermes_webui_skills
-    driver: local
-    driver_opts:
-      type: none
-      device: ${PWD}/data/hermes/skills
-      o: bind
+# 2026-09-11 停用：是 hermes_data_volume 的子目录，嵌套挂载冗余
+#  hermes_webui_plugins_volume:
+#    name: hermes_webui_plugins
+#    driver: local
+#    driver_opts:
+#      type: none
+#      device: ${PWD}/data/hermes/plugins
+#      o: bind
+#  hermes_webui_skills_volume:
+#    name: hermes_webui_skills
+#    driver: local
+#    driver_opts:
+#      type: none
+#      device: ${PWD}/data/hermes/skills
+#      o: bind
   hermes_obsidian_volume:
     name: hermes_obsidian_data
     driver: local
@@ -1039,14 +1043,14 @@ volumes:
       type: none
       device: ${HOME}/.openclaude
       o: bind
-  app_volume:
-    # 可选配置
-    name: hermes_app
-    driver: local  # 默认就是 local
-    driver_opts:   # 高级选项
-      type: none
-      device: ${PWD}/app
-      o: bind
+# 2026-09-11 停用：/app 改由镜像提供（Ekko MCP 已固化到 /opt/ekko/bin）
+#  app_volume:
+#    name: hermes_app
+#    driver: local
+#    driver_opts:
+#      type: none
+#      device: ${PWD}/app
+#      o: bind
   ssh_volume:
     # 可选配置
     name: hermes_ssh

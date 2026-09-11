@@ -4,20 +4,6 @@ set -e
 echo "=== Running custom entrypoint script ==="
 echo "=== Running as user: $(whoami) (UID: $(id -u)) ==="
 
-# ── 新增：修复 /app/bin 目录权限 ──
-echo "=== Fixing /app/bin permissions ==="
-if [ -d "/app/bin" ]; then
-    # 确保所有 .sh 文件可执行
-    find /app/bin -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
-    # 或者直接给整个目录加执行权限
-    chmod -R +x /app/bin 2>/dev/null || true
-    echo "✓ /app/bin permissions fixed"
-    echo "Contents of /app/bin:"
-    ls -la /app/bin/
-else
-    echo "⚠ /app/bin directory not found!"
-fi
-
 # 如果以 root 运行，修复权限
 if [ "$(id -u)" = "0" ]; then
     echo "=== Fixing permissions (running as root) ==="
@@ -123,23 +109,8 @@ else
 fi
 
 export PATH="/home/agent/.local/bin:$PATH"
-# ── 最终启动：使用 start-studio-all.sh ──
-echo "=== Starting Hermes Studio ==="
-if [ -f "/app/bin/start-studio-all.sh" ] && [ "${HERMES_GATEWAY_MODE:-0}" != "1" ];  then
-    # 修复所有 .sh 和 .mjs 的 CRLF 与权限
-    find /app/bin -type f \( -name "*.sh" -o -name "*.mjs" \) -exec sed -i 's/\r$//' {} \; 2>/dev/null || true
-    find /app/bin -type f \( -name "*.sh" -o -name "*.mjs" \) -exec chmod +x {} \; 2>/dev/null || true
-    # 直接尝试执行（文件在构建时已有权限）
-    if [ -x "/app/bin/start-studio-all.sh" ]; then
-        echo "✓ Executing: /app/bin/start-studio-all.sh $@"
-        exec /app/bin/start-studio-all.sh "$@"
-    else
-        # 如果权限丢失，用 bash 执行
-        echo "⚠ Permissions lost due to mount, executing with bash"
-        exec bash /app/bin/start-studio-all.sh "$@"
-    fi
-else
-    echo "✗ ERROR: /app/bin/start-studio-all.sh not found!"
-    echo "Falling back to 'hermes gateway run'"
-    exec su -s /bin/bash hermes -c "/opt/hermes/.venv/bin/hermes gateway run"
-fi
+# ── 最终启动 ──
+# 2026-09-11：/app 已从 hermes 容器移除（改由镜像提供，Ekko MCP 固化在 /opt/ekko/bin），
+# 本容器固定走 gateway。
+echo "=== Starting Hermes gateway ==="
+exec su -s /bin/bash hermes -c "/opt/hermes/.venv/bin/hermes gateway run"

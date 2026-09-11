@@ -1,0 +1,267 @@
+# syntax=docker/dockerfile:1
+# ============================================================
+# hermes-base —— 公共基座镜像（统一工具链 / 统一路径 / 单一版本）
+# ------------------------------------------------------------
+# 派生两个镜像：
+#   hermes-agent:main      (hermes 容器 : gateway / 渠道 / cron / MCP)
+#   hermes-web-ui:<ver>    (webui 容器 : Ekko Studio UI + 网页聊天 agent)
+#
+# 统一约定（两端一致，禁止各镜像另装一份）：
+#   agent-browser CLI  → /usr/local/bin/agent-browser （PATH 命中）
+#   Chromium           → /opt/hermes/.playwright/chromium-<rev> （PLAYWRIGHT_BROWSERS_PATH）
+#   Ekko Studio MCP    → /opt/ekko/bin/ekko-studio-mcp.mjs （自包含单文件）
+#   ⚠ 禁止执行 agent-browser install（会在 $HOME/.agent-browser 再下第三份 Chrome）
+# ============================================================
+FROM nousresearch/hermes-agent:main
+
+ARG NODE_VERSION=24.19.0
+ARG PLAYWRIGHT_VERSION=1.62.0
+ARG PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_EXTRA_INDEX=https://pypi.org/simple
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+
+ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
+    NODE_OPTIONS=--max-old-space-size=4096 \
+    NPM_CONFIG_REGISTRY=${NPM_REGISTRY} \
+    NODEJS_ORG_MIRROR=${NPM_REGISTRY}/-/binary/node \
+    ELECTRON_MIRROR=${NPM_REGISTRY}/-/binary/electron/ \
+    PYTHON_MIRROR=${NPM_REGISTRY}/-/binary/python/ \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright \
+    CRAWL4AI_PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright \
+    NODE_PATH=/usr/lib/node_modules \
+    HF_HOME=/opt/hermes/.whisper
+
+USER root
+WORKDIR /opt/hermes
+
+# ============================================
+# 1) apt 源 -> 阿里云
+# ============================================
+RUN if [ -f /etc/apt/sources.list ]; then \
+        sed -i 's/deb.debian.org/mirrors.aliyun.com/g; s/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list; \
+    elif [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's/deb.debian.org/mirrors.aliyun.com/g; s/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources; \
+    else \
+        echo "no sources.list, skip"; \
+    fi
+
+# ============================================
+# 2) 系统依赖（一次装齐、已去重；含 Chromium 运行时库）
+# ============================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        build-essential \
+        curl \
+        wget \
+        make \
+        g++ \
+        ffmpeg \
+        libnss3 \
+        libatk-bridge2.0-0 \
+        libdrm2 \
+        libxkbcommon0 \
+        libgbm1 \
+        libasound2 \
+        dbus \
+        libgtk-3-0 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# ============================================
+# 3) Node.js（唯一版本，24.x）
+# ============================================
+RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in amd64) NODE_ARCH=x64;; arm64) NODE_ARCH=arm64;; *) NODE_ARCH=$ARCH;; esac \
+    && curl -fsSL "https://mirrors.huaweicloud.com/nodejs/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz" -o /tmp/node.tar.gz \
+       || curl -fsSL "https://registry.npmmirror.com/-/binary/node/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz" -o /tmp/node.tar.gz \
+    && rm -rf /usr/local/lib/node_modules /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+    && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 \
+    && rm -f /tmp/node.tar.gz \
+    && apt-get update && apt-get install -y python3-pip && rm -rf /var/lib/apt/lists/* \
+    && npm config set registry ${NPM_REGISTRY} \
+    && node --version && npm --version
+
+# ============================================
+# 4) Python 环境与依赖
+# ============================================
+RUN python3 -m venv /opt/hermes/.venv
+
+RUN /opt/hermes/.venv/bin/pip install \
+        --index-url ${PIP_INDEX} \
+        --extra-index-url ${PIP_EXTRA_INDEX} \
+        --no-cache-dir \
+        -e /opt/hermes \
+        'firecrawl-py>=4.37.0'
+
+# 固化 lazy_deps 的两处版本 pin（消除启动期 lazy-refresh 竞态）
+RUN sed -i 's/edge-tts==7\.2\.7/edge-tts==7.2.8/g' /opt/hermes/tools/lazy_deps.py && \
+    sed -i 's/firecrawl-py==4\.17\.0/firecrawl-py>=4.17.0,<5/' /opt/hermes/tools/lazy_deps.py && \
+    grep -q 'edge-tts==7.2.8' /opt/hermes/tools/lazy_deps.py
+
+RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
+        --index-url ${PIP_INDEX} \
+        -e /opt/hermes \
+        'qdrant-client>=1.19.0' \
+        'psycopg[binary]>=3.2.0' \
+        'lark-oapi>=1.6.8' \
+        'qrcode>=7.4.2' \
+        'dingtalk-stream>=0.24.3' \
+        'alibabacloud-dingtalk>=2.2.49' \
+        "playwright==${PLAYWRIGHT_VERSION}" \
+        'websocket-client>=1.9.0'
+
+RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
+        --index-url ${PIP_EXTRA_INDEX} \
+        --extra-index-url ${PIP_INDEX} \
+        'crawl4ai'
+
+# firecrawl-anydoc 为 Rust 原生包，pip 处理更好
+RUN /opt/hermes/.venv/bin/pip install firecrawl-anydoc --index-url ${PIP_EXTRA_INDEX}
+
+# 文档 / 办公 / 语音
+RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
+        --index-url ${PIP_INDEX} \
+        'openpyxl>=3.1.5' \
+        'python-docx>=1.1.0' \
+        'python-pptx>=1.0.2' \
+        'defusedxml>=0.7.1' \
+        'pymupdf>=1.24.0' \
+        'Pillow>=10.0.0' \
+        'lxml>=5.0.0' \
+        'pandas>=2.0.0' \
+        'xlsxwriter>=3.1.0' \
+        'edge-tts>=7.2.8'
+
+# MCP 客户端 / 视频转写
+RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
+        --index-url ${PIP_INDEX} \
+        mcp \
+        'yt-dlp>=2024.12.13' \
+        'faster-whisper>=1.1.0'
+
+# ============================================
+# 5) 全局 npm 工具（含 agent-browser；统一版本面）
+# ============================================
+RUN export PATH="/usr/local/bin:$PATH" && \
+    npm install -g \
+        @gitlawb/openclaude \
+        reasonix \
+        @firecrawl/anydoc \
+        @marp-team/marp-cli \
+        chrome-devtools-mcp \
+        agent-browser \
+        @colbymchenry/codegraph \
+        "playwright@${PLAYWRIGHT_VERSION}" \
+        pptxgenjs \
+        sharp \
+        pdf-lib && \
+    ln -sf "$(npm root -g)/@colbymchenry/codegraph/npm-shim.js" /usr/local/bin/codegraph && \
+    ln -sf /usr/local/bin/node /usr/bin/node && \
+    ln -sf /usr/local/bin/npm /usr/bin/npm && \
+    ln -sf /usr/local/bin/npx /usr/bin/npx && \
+    agent-browser --version && \
+    codegraph --version && \
+    npm cache clean --force
+
+# ============================================
+# 6) Chromium（单一 revision；两容器共用 PLAYWRIGHT_BROWSERS_PATH）
+# ============================================
+RUN mkdir -p /opt/hermes/.playwright && \
+    echo "=== Installing Chromium (single revision) ===" && \
+    ( PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright \
+      PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright \
+      /opt/hermes/.venv/bin/python3 -m playwright install chromium || \
+      PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright \
+      PLAYWRIGHT_DOWNLOAD_HOST=${NPM_REGISTRY}/-/binary/playwright \
+      /opt/hermes/.venv/bin/python3 -m playwright install chromium || \
+      PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright \
+      /opt/hermes/.venv/bin/python3 -m playwright install chromium ) && \
+    CHROME_PATH=$(find /opt/hermes/.playwright -name chrome -type f 2>/dev/null | head -1) && \
+    if [ -n "$CHROME_PATH" ]; then \
+        echo "Chromium: $CHROME_PATH"; $CHROME_PATH --version 2>/dev/null || true; \
+    else \
+        echo "Chromium not found"; ls -la /opt/hermes/.playwright/; exit 1; \
+    fi && \
+    ls -d /opt/hermes/.playwright/chromium-* 2>/dev/null
+
+# ============================================
+# 7) Ekko Studio MCP（自包含单文件，两容器共用；不再依赖宿主 /app）
+# ============================================
+COPY app/bin/ekko-studio-mcp.mjs app/bin/hermes-studio-mcp.mjs app/bin/hermes-web-ui-mcp.mjs /opt/ekko/bin/
+COPY app/package.json /opt/ekko/package.json
+RUN chmod +x /opt/ekko/bin/*.mjs && \
+    node --check /opt/ekko/bin/ekko-studio-mcp.mjs && \
+    echo "Ekko MCP installed at /opt/ekko/bin"
+
+# ============================================
+# 8) 技能 / 工具链固化（装镜像内，避开卷遮蔽）
+# ============================================
+# 8.1 AgentChat 框架（skills 由 entrypoint 链入共享卷，故两容器都要有本体）
+COPY agentchat-framework/ /opt/agentchat/
+RUN cd /opt/agentchat && \
+    npm install --no-audit --no-fund && \
+    (cd skills/AgentChat-OneWeb && npm install --no-audit --no-fund) && \
+    test -d /opt/agentchat/node_modules && \
+    test -d /opt/agentchat/skills/AgentChat-OneWeb/node_modules && \
+    echo "AgentChat deps ok"
+
+# 8.2 Serena
+RUN python3 -m venv /opt/serena-venv && \
+    /opt/serena-venv/bin/pip install -i ${PIP_INDEX} 'serena-agent==1.6.1' && \
+    HOME=/home/agent /opt/serena-venv/bin/serena init
+
+# 8.3 book-to-skill（未上 PyPI，源码安装）
+COPY book-to-skill/ /opt/book-to-skill/
+RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
+        --index-url ${PIP_INDEX} \
+        '/opt/book-to-skill[pdf,epub,docx,html,rtf]'
+
+# 8.4 archify（Node CLI 零依赖）
+COPY archify-src/archify/ /opt/archify/
+RUN ln -sf /opt/archify/bin/archify.mjs /usr/local/bin/archify && \
+    chmod +x /opt/archify/bin/archify.mjs
+
+# 8.5 AI-Video-Transcriber + whisper 模型（构建期 COPY，零网络依赖）
+COPY ai-video-transcriber/ /opt/ai-video-transcriber/
+COPY whisper-model/ /opt/hermes/.whisper/
+
+COPY sqlite-autoconf-3530400.tar.gz /tmp/
+RUN set -eu; \
+    echo "📦 Starting SQLite compilation..."; \
+    if [ ! -f /tmp/sqlite-autoconf-3530400.tar.gz ]; then \
+        echo "❌ SQLite tarball not found!"; \
+        echo "⚠️ Installing SQLite from apt as fallback..."; \
+        apt-get update && apt-get install -y sqlite3 libsqlite3-dev && \
+        sqlite3 --version && \
+        exit 0; \
+    fi; \
+    tar xzf /tmp/sqlite-autoconf-3530400.tar.gz -C /tmp; \
+    cd /tmp/sqlite-autoconf-3530400; \
+    ./configure --prefix=/usr/local --all; \
+    make -j$(nproc) && make install; \
+    ldconfig; \
+    sqlite3 --version; \
+    /opt/hermes/.venv/bin/python3 -c \
+        "import sqlite3; v=sqlite3.sqlite_version; print(f'✅ SQLite upgraded: {v}'); assert v>='3.51.3'"; \
+    rm -rf /tmp/sqlite-autoconf-*
+
+# 8.6 CJK FTS5 扩展（镜像内 /usr/local/lib）
+RUN cd /opt/hermes/native/fts5_cjk && \
+    gcc -shared -fPIC -O2 -Wall -I/usr/local/include fts5_cjk.c -o libfts5_cjk.so && \
+    install -m 0644 libfts5_cjk.so /usr/local/lib/libfts5_cjk.so
+
+# ============================================
+# 9) SQLite 版本核验（基础镜像已自带新版；不再编译，避免降级）
+# ============================================
+RUN /opt/hermes/.venv/bin/python3 -c \
+        "import sqlite3,sys; v=sqlite3.sqlite_version; print('sqlite:',v); sys.exit(0 if v>='3.51.3' else 1)"
+
+# ============================================
+# 10) 路径 / 环境收尾
+# ============================================
+RUN mkdir -p /home/agent/.local/bin && \
+    ln -sf /opt/hermes/.venv/bin/hermes /home/agent/.local/bin/hermes && \
+    printf 'export PATH=/home/agent/.local/bin:$PATH\n' >> /home/agent/.bashrc && \
+    printf 'export PYTHONPATH="/opt/hermes${PYTHONPATH:+:${PYTHONPATH}}"\n' >> /etc/profile.d/hermes.sh && \
+    printf 'export PYTHONPATH="/opt/hermes${PYTHONPATH:+:${PYTHONPATH}}"\n' >> /home/agent/.bashrc
+
+ENV PATH=/opt/hermes/.venv/bin:/home/agent/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

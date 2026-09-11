@@ -672,6 +672,11 @@ mcp_servers:
     args:
       - /usr/lib/node_modules/ppt-mcp/build/index.js
     enabled: true
+  chrome-devtools:
+    command: /usr/bin/chrome-devtools-mcp
+    args:
+      - --isolated
+    enabled: true
   context7:
     command: node
     args:
@@ -685,7 +690,7 @@ mcp_servers:
   hermes-studio-api:
     command: /usr/local/bin/node
     args:
-      - /app/bin/hermes-studio-mcp.mjs
+      - /opt/ekko/bin/hermes-studio-mcp.mjs
       - api
     env:
       HERMES_WEB_UI_URL: http://127.0.0.1:6060
@@ -716,7 +721,7 @@ mcp_servers:
   hermes-studio-devices:
     command: /usr/local/bin/node
     args:
-      - /app/bin/hermes-studio-mcp.mjs
+      - /opt/ekko/bin/hermes-studio-mcp.mjs
       - devices
     env:
       HERMES_WEB_UI_URL: http://127.0.0.1:6060
@@ -730,7 +735,7 @@ mcp_servers:
   hermes-studio-use:
     command: /usr/local/bin/node
     args:
-      - /app/bin/hermes-studio-mcp.mjs
+      - /opt/ekko/bin/hermes-studio-mcp.mjs
       - use
     env:
       HERMES_WEB_UI_URL: http://127.0.0.1:6060
@@ -744,7 +749,7 @@ mcp_servers:
   hermes-studio-browser:
     command: /usr/local/bin/node
     args:
-      - /app/bin/hermes-studio-mcp.mjs
+      - /opt/ekko/bin/hermes-studio-mcp.mjs
       - browser
     env:
       HERMES_WEB_UI_URL: http://127.0.0.1:6060
