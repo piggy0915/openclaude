@@ -758,7 +758,7 @@ services:
     volumes:
 #      - hermes_node_modules_volume:/usr/lib/node_modules
       - hermes_data_volume:/home/agent/.hermes
-      - hermes_webui_data_volume:/home/agent/.hermes-webui
+      - hermes_webui_data_volume:/home/agent/.hermes-web-ui
       # 2026-09-11 移除：plugins/skills 是 .hermes 卷的子目录，嵌套挂载冗余
 #      - ${HERMES_CONFIG_DIR:-./config/hermes}/hermes.yaml:/home/agent/.hermes/config.yaml
 #      - ${HERMES_CONFIG_DIR:-./config/hermes}/config.yaml:/home/agent/config.yaml

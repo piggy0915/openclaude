@@ -21,7 +21,7 @@ build_hermes() {
 }
 build_webui() {
   echo "==> [3/3] WebUI 镜像 $TAG_WEBUI"
-  docker build -f app/Dockerfile --build-arg BASE_IMAGE="$TAG_BASE" -t "$TAG_WEBUI" app
+#  docker build -f app/Dockerfile --build-arg BASE_IMAGE="$TAG_BASE" -t "$TAG_WEBUI" app
 }
 
 case "$TARGET" in
