@@ -121,5 +121,12 @@ export PATH="/home/agent/.local/bin:$PATH"
 # ── 最终启动 ──
 # 2026-09-11：/app 已从 hermes 容器移除（改由镜像提供，Ekko MCP 固化在 /opt/ekko/bin），
 # 本容器固定走 gateway。
-echo "=== Starting Hermes gateway ==="
-exec su -s /bin/bash hermes -c "/opt/hermes/.venv/bin/hermes gateway run"
+# 2026-09-11 uid 统一：gateway 以 root 运行。
+#   原 `su hermes(10000)` 与 webui 容器（Ekko Studio，以 root 运行并写共享 HERMES_HOME）
+#   产生 uid 冲突：auth.json / .skills_prompt_snapshot.json / shared/nous_auth.json 由 webui
+#   以 0600 root 写入，10000 读不到 → nous-auth-keepalive 线程反复崩溃；
+#   且 10000 无法进入 /root(0700) → 该容器的 SSH 终端后端不可用。
+#   两容器统一为 root 后冲突消失（agent 本就在 webui 容器以 root 执行，无新增暴露面）。
+#   compose 已设 HERMES_ALLOW_ROOT_GATEWAY=1。
+echo "=== Starting Hermes gateway (uid=$(id -u)) ==="
+exec /opt/hermes/.venv/bin/hermes gateway run
