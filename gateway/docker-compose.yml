@@ -763,6 +763,28 @@ services:
 #      - hermes_node_modules_volume:/usr/lib/node_modules
       - hermes_data_volume:/home/agent/.hermes
       - hermes_webui_data_volume:/home/agent/.hermes-web-ui
+
+      # ===== B′（2026-09-12）：状态 / 内容 分离 =====
+      # 运行时家：只放 state.db、logs、lock 等运行态，Hermes 自行创建
+      - hermes_runtime_volume:/home/agent/.hermes-rt
+      # 共享「内容类」：读写穿透到共享真源 data/hermes（记忆/技能/配置仍是同一份）
+      # 注意：.lock 必须与它保护的文件一起共享，否则等于无锁
+      - ${PWD}/data/hermes/memories:/home/agent/.hermes-rt/memories
+      - ${PWD}/data/hermes/skills:/home/agent/.hermes-rt/skills
+      - ${PWD}/data/hermes/plugins:/home/agent/.hermes-rt/plugins
+      - ${PWD}/data/hermes/hooks:/home/agent/.hermes-rt/hooks
+      - ${PWD}/data/hermes/mcp:/home/agent/.hermes-rt/mcp
+      - ${PWD}/data/hermes/bin:/home/agent/.hermes-rt/bin
+      - ${PWD}/data/hermes/cron:/home/agent/.hermes-rt/cron
+      - ${PWD}/data/hermes/shared:/home/agent/.hermes-rt/shared
+      - ${PWD}/data/hermes/wisdom:/home/agent/.hermes-rt/wisdom
+      - ${PWD}/data/hermes/workspace:/home/agent/.hermes-rt/workspace
+      - ${PWD}/data/hermes/SOUL.md:/home/agent/.hermes-rt/SOUL.md
+      - ${PWD}/data/hermes/config.yaml:/home/agent/.hermes-rt/config.yaml
+      - ${PWD}/data/hermes/.env:/home/agent/.hermes-rt/.env
+      - ${PWD}/data/hermes/auth.json:/home/agent/.hermes-rt/auth.json
+      - ${PWD}/data/hermes/auth.lock:/home/agent/.hermes-rt/auth.lock
+      - ${PWD}/data/hermes/install_id:/home/agent/.hermes-rt/install_id
       # 2026-09-11 移除：plugins/skills 是 .hermes 卷的子目录，嵌套挂载冗余
 #      - ${HERMES_CONFIG_DIR:-./config/hermes}/hermes.yaml:/home/agent/.hermes/config.yaml
 #      - ${HERMES_CONFIG_DIR:-./config/hermes}/config.yaml:/home/agent/config.yaml
@@ -778,7 +800,8 @@ services:
     environment:
       # 2026-09-11 移除：AGENT_ENDPOINT 是死配置（Ekko Studio 不读，全 /app 0 匹配）
       - PORT=${PORT:-6060}
-      - HERMES_HOME=/home/agent/.hermes
+      # B′（2026-09-12）：webui 使用独立「状态家」，内容类由上方逐项挂载共享
+      - HERMES_HOME=/home/agent/.hermes-rt
       - HERMES_BIN=/opt/hermes/.venv/bin/hermes
       # gateway 归属：由 hermes 容器持有，避免两容器抢同一 HERMES_HOME
       - HERMES_WEB_UI_MANAGED_GATEWAY=0
@@ -1021,6 +1044,14 @@ volumes:
     driver_opts:   # 高级选项
       type: none
       device: ${PWD}/scripts
+      o: bind
+  # B′（2026-09-12）：webui 独立「状态家」——只放 state.db / logs / lock 等运行态
+  hermes_runtime_volume:
+    name: hermes_runtime
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/data/hermes-runtime
       o: bind
 # 2026-09-11 停用：是 hermes_data_volume 的子目录，嵌套挂载冗余
 #  hermes_webui_plugins_volume:
