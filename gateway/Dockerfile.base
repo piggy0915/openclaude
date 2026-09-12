@@ -200,7 +200,8 @@ RUN CHROMIUM_REV=$(/opt/hermes/.venv/bin/python3 -c "import json,glob;print(next
 # ============================================
 COPY app/bin/ekko-studio-mcp.mjs app/bin/hermes-studio-mcp.mjs app/bin/hermes-web-ui-mcp.mjs /opt/ekko/bin/
 COPY app/package.json /opt/ekko/package.json
-RUN chmod +x /opt/ekko/bin/*.mjs && \
+# CRLF 归一：源 app/bin/*.mjs 由 Ekko 构建生成，恒为 CRLF；直接执行报 env: 'node\r'
+RUN sed -i 's/\r$//' /opt/ekko/bin/*.mjs && \
     node --check /opt/ekko/bin/ekko-studio-mcp.mjs && \
     echo "Ekko MCP installed at /opt/ekko/bin"
 
