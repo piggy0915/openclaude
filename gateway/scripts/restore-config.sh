@@ -48,10 +48,11 @@ case "${1:-}" in
   --list)
     pat="${2:-}"
     echo "快照目录：$SNAP_DIR"
-    ls -1t "$SNAP_DIR"/* 2>/dev/null | while read -r f; do
+    ls -1At "$SNAP_DIR" 2>/dev/null | while read -r b; do
+      f="$SNAP_DIR/$b"
       [ -f "$f" ] || continue
-      b=$(basename "$f")
-      [ "$b" = "snapshots.log" ] && continue
+      [ "$b" = "snapshots.log" ] && continue   # 点开头文件（.env 快照 / .last-run）用 -A 才能列出
+      [ "$b" = ".last-run" ] && continue
       if [ -n "$pat" ]; then case "$b" in *"$pat"*) ;; *) continue ;; esac; fi
       printf '  %-46s %8s字节  段数:%-4s  %s\n' "$b" "$(stat -c %s "$f")" "$(keys_of "$f" | wc -l)" "$(date -r "$f" '+%F %T')"
     done
