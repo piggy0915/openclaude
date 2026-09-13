@@ -622,6 +622,9 @@ services:
       - hermes_scripts_volume:/home/agent/scripts
       - hermes_webui_data_volume:/home/agent/.hermes-web-ui
       - hermes_obsidian_volume:/knowledge_base/obsidian:rw
+      # ========== 共享工作卷（2026-09-13）：项目 / 开发 / 咨询 / 知识 / 视频 ==========
+      # 宿主实盘 ${PWD}/data/workspace（/home 分区，约 64G 可用）；两容器路径统一 /workspace
+      - hermes_workspace_volume:/workspace:rw
 
       # ========== SSH 私钥挂载（建议只读） ==========
       - ssh_volume:/root/.ssh:ro  # 添加 :ro 只读权限更安全
@@ -785,6 +788,8 @@ services:
       - ${PWD}/data/hermes/auth.json:/home/agent/.hermes-rt/auth.json
       - ${PWD}/data/hermes/auth.lock:/home/agent/.hermes-rt/auth.lock
       - ${PWD}/data/hermes/install_id:/home/agent/.hermes-rt/install_id
+      # ===== 共享工作卷（2026-09-13）：与 hermes 容器同一份，路径统一 /workspace =====
+      - hermes_workspace_volume:/workspace:rw
       # 2026-09-11 移除：plugins/skills 是 .hermes 卷的子目录，嵌套挂载冗余
 #      - ${HERMES_CONFIG_DIR:-./config/hermes}/hermes.yaml:/home/agent/.hermes/config.yaml
 #      - ${HERMES_CONFIG_DIR:-./config/hermes}/config.yaml:/home/agent/config.yaml
@@ -1052,6 +1057,15 @@ volumes:
     driver_opts:
       type: none
       device: ${PWD}/data/hermes-runtime
+      o: bind
+  # 共享工作卷（2026-09-13）：项目 / 开发 / 咨询资料 / 知识管理 / 视频材料
+  # ⚠ 放 /home 分区（约 64G 可用）；不要放 /var（Docker 仅余约 11G）
+  hermes_workspace_volume:
+    name: hermes_workspace
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/data/workspace
       o: bind
 # 2026-09-11 停用：是 hermes_data_volume 的子目录，嵌套挂载冗余
 #  hermes_webui_plugins_volume:
