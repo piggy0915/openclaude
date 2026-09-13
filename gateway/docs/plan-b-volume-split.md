@@ -180,3 +180,11 @@ docker start hermes hermes-webui
 - B′ 消除的是 `state.db` 这一类冲突；
 - 目录内其余运行态 DB（`shared-state.db`、`response_store.db`、`kanban.db`…）仍建议成对重启；
 - 两者叠加 = 既有纪律、又无结构隐患。
+
+---
+
+## 8. 关联变更（2026-09-13）
+
+- **共享工作卷** `hermes_workspace` → 容器 `/workspace`、宿主软链 `/workspace`：见 `docs/work-volume.md`
+- **`terminal.cwd: /workspace`**：借工作卷统一了三视角工作目录（容器 hermes / 容器 hermes-webui / 宿主），消除了「单一 cwd 无法同时适配两种后端」的矛盾；详见 `docs/work-volume.md`
+- 两者均已写入 `REBUILD-CHECKLIST.md §1.5`（重建后必查）
