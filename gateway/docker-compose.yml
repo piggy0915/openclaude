@@ -155,7 +155,7 @@ services:
       # 向量数据库 - 指向你现有的 Qdrant
       VECTOR_STORE: qdrant
       QDRANT_URL: http://qdrant:6333
-      QDRANT_API_KEY: ${QDRANT_API_KEY:-dify123456}
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
       # Embedding 服务 - 指向你现有的 embedding-llama
       EMBEDDING_PROVIDER: openai  # 使用 OpenAI 兼容接口
       OPENAI_API_BASE: http://embedding-llama:8000/v1
@@ -172,7 +172,7 @@ services:
       APP_WEB_URL: ${APP_WEB_URL:-http://localhost:8083}
       APP_API_URL: ${APP_API_URL:-http://localhost:8082}
       PLUGIN_DAEMON_URL: ${PLUGIN_DAEMON_URL:-http://dify-plugin_daemon:5002}
-      PLUGIN_DAEMON_KEY: ${PLUGIN_DAEMON_KEY:-sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V}
+      PLUGIN_DAEMON_KEY: ${PLUGIN_DAEMON_KEY}
       MODE: api
       LOG_LEVEL: INFO
       TZ: Asia/Shanghai
@@ -219,7 +219,7 @@ services:
       CELERY_BROKER_URL: redis://:${DIFY_REDIS_PASSWORD:-dify123456}@${DIFY_REDIS_HOST:-redis}:${DIFY_REDIS_PORT:-6379}/1
       VECTOR_STORE: qdrant
       QDRANT_URL: http://qdrant:6333
-      QDRANT_API_KEY: ${QDRANT_API_KEY:-dify123456}
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
       EMBEDDING_PROVIDER: openai
       OPENAI_API_BASE: http://embedding-llama:8000/v1
       OPENAI_API_KEY: dummy
@@ -315,13 +315,13 @@ services:
       DB_PASSWORD: ${DIFY_DB_PASSWORD:-dify123456}
       SERVER_PORT: 5002
       SERVER_HOST: 0.0.0.0
-      SERVER_KEY: ${PLUGIN_DAEMON_KEY:-plugin-daemon-key}
+      SERVER_KEY: ${PLUGIN_DAEMON_KEY}
       MAX_PLUGIN_PACKAGE_SIZE: ${PLUGIN_MAX_PACKAGE_SIZE:-52428800}
       PPROF_ENABLED: ${PLUGIN_PPROF_ENABLED:-false}
       DIFY_INNER_API_URL: http://dify-api:5001
-      DIFY_INNER_API_KEY: ${PLUGIN_DAEMON_KEY:-plugin-daemon-key}
+      DIFY_INNER_API_KEY: ${PLUGIN_DAEMON_KEY}
       DIFY_API_URL: http://dify-api:5001
-      DIFY_API_KEY: ${PLUGIN_DAEMON_KEY:-plugin-daemon-key}
+      DIFY_API_KEY: ${PLUGIN_DAEMON_KEY}
       PLUGIN_REMOTE_INSTALLING_HOST: 0.0.0.0
       PLUGIN_REMOTE_INSTALLING_PORT: 5003
       PLUGIN_WORKING_PATH: ${PLUGIN_WORKING_PATH:-/app/storage/cwd}
@@ -387,7 +387,7 @@ services:
 #      - ./scripts/coze-adapter.py:/app/main.py:ro
 #    environment:
 #      - HERMES_API_URL=http://hermes:8642
-#      - API_SERVER_KEY=${API_SERVER_KEY:-sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V}
+      # - API_SERVER_KEY: 已迁移至 config/.env（2026-09-14，避免内联密钥入库）
 #
 #    command: >
 #      bash -c "
@@ -470,12 +470,14 @@ services:
     environment:
       - OBSIDIAN_VAULT_PATH=/knowledge_base/obsidian
       - HERMES_API_URL=http://hermes:8642
-      - API_SERVER_KEY=${API_SERVER_KEY:-sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V}
       - SYNC_INTERVAL=${SYNC_INTERVAL:-300}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - TZ=Asia/Shanghai
       - PYTHONUNBUFFERED=1  # 实时输出日志
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      # 2026-09-14 修：该 watchdog 版同步以前没设集合 → 走脚本默认 hermes_memory，
+      # 每次笔记变更都往「记忆库」灌 350 字分块（就是跨集合重复的成因）。明确指向知识库。
+      - QDRANT_COLLECTION=hermes_knowledge
     command: >
       bash -c "
         pip install watchdog requests &&
@@ -570,7 +572,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
       # 可选：设置 API 密钥（生产环境强烈建议）
-      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY:-sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V}
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
       # 可选：配置日志级别
       - QDRANT__LOG_LEVEL=INFO
       # 优化内存使用
@@ -672,8 +674,6 @@ services:
       - API_SERVER_ENABLED=true
       - API_SERVER_PORT=8642
       - API_SERVER_HOST=0.0.0.0
-      - API_SERVER_KEY=${API_SERVER_KEY:-sk-yxYy2y6sbaV6GNnFfMOhacaegNk1VjD052F9TFtFolV2Fo0V}
-
       # 禁用可能冲突的功能
 #      - HERMES_LOG_LEVEL=debug
 #      - DISABLE_MESSAGING_PLATFORMS=true

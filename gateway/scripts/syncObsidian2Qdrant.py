@@ -37,7 +37,9 @@ logger = logging.getLogger(__name__)
 VAULT_PATH = os.environ.get('OBSIDIAN_VAULT_PATH', '/knowledge_base/obsidian')
 QDRANT_HOST = os.environ.get('QDRANT_HOST', 'qdrant')
 QDRANT_PORT = os.environ.get('QDRANT_PORT', '6333')
-QDRANT_COLLECTION = os.environ.get('QDRANT_COLLECTION', 'hermes_memory')
+# 默认改 hermes_knowledge（2026-09-14）：笔记同步的目标是知识库；旧默认 hermes_memory
+# 曾让 watchdog 容器把 1445 个笔记分块灌进记忆库，造成跨集合重复。
+QDRANT_COLLECTION = os.environ.get('QDRANT_COLLECTION', 'hermes_knowledge')
 QDRANT_API_KEY = os.environ.get('QDRANT_API_KEY', '')
 EMBEDDING_URL = os.environ.get('EMBEDDING_URL', 'http://embedding-llama:8000/v1/embeddings')
 EMBEDDING_MODEL = os.environ.get('EMBEDDING_MODEL', 'bge-large-zh-v1.5')
