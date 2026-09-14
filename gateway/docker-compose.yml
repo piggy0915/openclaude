@@ -769,7 +769,10 @@ services:
 
       # ===== B′（2026-09-12）：状态 / 内容 分离 =====
       # 运行时家：只放 state.db、logs、lock 等运行态，Hermes 自行创建
-      - hermes_runtime_volume:/home/agent/.hermes-rt
+      # B″→B″″(2026-09-14): webui 顶级 home 改宿主目录 bind，顶层配置文件是目录内普通文件，
+      # 原子写(os.replace)不再覆盖“挂载点”→消除 EBUSY 500。容器单独写、宿主 data/.hermes-rt 持久可见。
+      # 单文件 bind(=挂载点=必然 EBUSY)已全部移除；子目录内容仍目录级 bind 共享真源 data/hermes。
+      - ${PWD}/data/.hermes-rt:/home/agent/.hermes-rt
       # 共享「内容类」：读写穿透到共享真源 data/hermes（记忆/技能/配置仍是同一份）
       # 注意：.lock 必须与它保护的文件一起共享，否则等于无锁
       - ${PWD}/data/hermes/memories:/home/agent/.hermes-rt/memories
@@ -782,14 +785,6 @@ services:
       - ${PWD}/data/hermes/shared:/home/agent/.hermes-rt/shared
       - ${PWD}/data/hermes/wisdom:/home/agent/.hermes-rt/wisdom
       - ${PWD}/data/hermes/workspace:/home/agent/.hermes-rt/workspace
-      - ${PWD}/data/hermes/SOUL.md:/home/agent/.hermes-rt/SOUL.md
-      - ${PWD}/data/hermes/config.yaml:/home/agent/.hermes-rt/config.yaml
-      # 2026-09-14 移除 .env 单文件 bind：单文件 bind = 挂载点，Hermes 保存 .env 用 tmp+os.replace 原子写，
-      # rename 覆盖挂载点必然 EBUSY → webui 每次写 .env 报 API 500。改由运行时卷承载普通文件(重建前由脚本播种)。
-      # 不影响 head：head 的 .env 在 hermes_data 命名卷，本就不是物理共享。config.yaml 是只读使用故保留 bind。
-      - ${PWD}/data/hermes/auth.json:/home/agent/.hermes-rt/auth.json
-      - ${PWD}/data/hermes/auth.lock:/home/agent/.hermes-rt/auth.lock
-      - ${PWD}/data/hermes/install_id:/home/agent/.hermes-rt/install_id
       # ===== 共享工作卷（2026-09-13）：与 hermes 容器同一份，路径统一 /workspace =====
       - hermes_workspace_volume:/workspace:rw
       # 2026-09-11 移除：plugins/skills 是 .hermes 卷的子目录，嵌套挂载冗余
