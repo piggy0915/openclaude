@@ -46,23 +46,16 @@ if [ -f /root/.ssh/id_rsa_hermes ] && [ ! -f /home/agent/.ssh/id_rsa_hermes ]; t
     echo "✓ SSH key configured"
 fi
 
-# 确保全局包的命令可用
-if [ -f /usr/lib/node_modules/@gitlawb/openclaude/bin/openclaude ]; then
-    echo "Creating symlink for openclaude..."
-#    ln -sf /usr/lib/node_modules/@gitlawb/openclaude/bin/openclaude /usr/bin/openclaude
-else
-    echo "⚠ openclaude not found at expected path"
-fi
-
-# 创建 reasonix 符号链接（正确路径）
-if [ -f /usr/lib/node_modules/reasonix/dist/cli/index.js ]; then
-    echo "Creating symlink for reasonix..."
-#    ln -sf /usr/lib/node_modules/reasonix/dist/cli/index.js /usr/bin/reasonix
-#    chmod +x /usr/bin/reasonix
-    echo "✓ reasonix symlink created from dist/cli/index.js"
-else
-    echo "⚠ reasonix not found at expected path"
-fi
+# 确保全局 npm 命令可用（2026-09-14 修正）
+#   npm -g 的包实际落在 /usr/local/lib/node_modules，命令软链在 /usr/local/bin（PATH 已含）
+#   旧代码写死 /usr/lib/node_modules（Debian 老布局）→ 一直误报 "not found at expected path"
+for _c in openclaude reasonix; do
+    if command -v "$_c" >/dev/null 2>&1; then
+        echo "✓ $_c available: $(command -v "$_c")"
+    else
+        echo "⚠ $_c not found in PATH —— 检查 Dockerfile.base 的 npm install -g 是否成功"
+    fi
+done
 
 # ── AgentChat skills 链接（运行时建链，进卷生效）──
 # 2026-08-20 修正：Dockerfile 构建时建链会被 hermes_data_volume 遮蔽（卷覆盖镜像层），
