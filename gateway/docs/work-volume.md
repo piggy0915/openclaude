@@ -51,7 +51,14 @@
 
 `config.yaml` 已设 `terminal.cwd: /workspace`，使脑侧（ssh→宿主）与 webui（容器内）两侧工作目录统一。
 
-⚠️ `config.yaml` 会被 Ekko 重写（历史上曾被精简到 8 个顶层键），**重建后必须复查该段是否还在**。
+**更正（2026-09-13 实测）**：`terminal.cwd` **不会**消除那条
+`skipping project-context discovery ... fell back to the Hermes install tree (/opt/hermes)` 警告。
+调用方是 Hermes 自己的 `gateway/run.py:964 → build_context_files_prompt()`，**没有传 cwd**，
+因此仍然走 `os.getcwd()` 回落（进程 cwd = /opt/hermes）。这是上游代码路径，配置改不动它；
+影响仅是"不加载项目上下文文件"（本机各目录下并无 `.hermes.md/AGENTS.md/CLAUDE.md`，实际零影响）。
+
+⚠️ `config.yaml` 可能被 Hermes 自己重写（`save_config(merge_existing=False)` 会丢未提及的段）→
+**重建后必须复查关键段是否还在**（用 `scripts/restore-config.sh --status`）。
 
 ## 生效与验收
 

@@ -188,3 +188,34 @@ docker start hermes hermes-webui
 - **共享工作卷** `hermes_workspace` → 容器 `/workspace`、宿主软链 `/workspace`：见 `docs/work-volume.md`
 - **`terminal.cwd: /workspace`**：借工作卷统一了三视角工作目录（容器 hermes / 容器 hermes-webui / 宿主），消除了「单一 cwd 无法同时适配两种后端」的矛盾；详见 `docs/work-volume.md`
 - 两者均已写入 `REBUILD-CHECKLIST.md §1.5`（重建后必查）
+
+---
+
+## 9. 已解决：文件级 bind 的「目录 vs 文件」错配（2026-09-13）
+
+**症状**（重启时出现，`hermes-webui` 起不来）：
+```
+failed to create shim task: ... error mounting "/home/user/gateway/data/hermes/auth.lock"
+to rootfs at "/home/agent/.hermes-rt/auth.lock": ... not a directory:
+Are you trying to mount a directory onto a file (or vice-versa)?
+```
+
+**根因**：B′ 把 6 个「内容类」文件逐个 bind 进 webui 的运行时家。Docker 首次启动会在
+**源侧与目标侧各建一个空的占位文件**（实测：`data/hermes-runtime/` 下 6 个 0 字节文件，Sep 12 20:14）。
+其中 **`auth.lock` 是临时锁文件**（Hermes 加锁后常会 unlink）→ 下次启动时源文件不存在，
+Docker 就把**源侧建成目录** → 再挂到卷内那个「文件」占位点上 → 容器创建失败。
+
+**处置**：`scripts/ensure-rt-file-binds.sh`（启动前守卫，已接入 `restart.sh`）
+- 源/目标只要是「空目录」就删掉并补成文件
+- 临时文件（`auth.lock`）缺失 → 直接补空文件
+- **内容文件（`auth.json`/`config.yaml`/`.env`/`SOUL.md`/`install_id`）缺失 → 只告警、不补空**
+  （补成 0 字节会让 Hermes 拿到空配置，比启动失败更糟），并以此中止启动
+- 实测：沙箱里精确复现该坑 → 守卫自愈；真实环境跑一次报告「6 项均为普通文件」
+
+**手工应急**（不跑守卫时）：
+```bash
+# 源侧被建成了目录 → 删掉再补文件
+rmdir /home/user/gateway/data/hermes/auth.lock && : > /home/user/gateway/data/hermes/auth.lock
+# 卷内占位被建成了目录 → 同样处理
+rmdir /home/user/gateway/data/hermes-runtime/auth.lock && : > /home/user/gateway/data/hermes-runtime/auth.lock
+```

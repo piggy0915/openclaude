@@ -1,26 +1,26 @@
 # config.yaml：基线 vs live 逐段差异
 
-> 生成时间：2026-09-13 09:24:49
+> 生成时间：2026-09-13 13:49:20
 
 | | 文件 | 大小 | 顶层段数 | mtime |
 |---|---|---|---|---|
 | 基线（仓库旁副本） | `/home/user/gateway/config/config.yaml` | 17568 B | 79 | 2026-09-11 08:45:40 |
-| live（容器实读） | `/home/user/gateway/data/hermes/config.yaml` | 5358 B | 9 | 2026-09-13 08:06:30 |
+| live（容器实读） | `/home/user/gateway/data/hermes/config.yaml` | 5732 B | 15 | 2026-09-13 10:33:29 |
 
-**结论**：live 比基线少 **70 个顶层段**（基线 79 段 → live 9 段）。
+**结论**：live 比基线少 **64 个顶层段**（基线 79 段 → live 15 段）。
 
 ## live 现有段（9）
 
 ```
-_config_version command_allowlist custom_providers mcp_servers memory model terminal tts web
+_config_version checkpoints command_allowlist custom_providers delegation known_plugin_toolsets logging mcp_servers memory model model_catalog sessions terminal tts web
 ```
 
 ## 基线独有段（按建议优先级）
 
-### ① 优先合并（对当前用法直接有用） — 25 段
+### ① 优先合并（对当前用法直接有用） — 19 段
 
 ```
-agent approvals browser checkpoints code_execution compression computer_use context credential_pool_strategies cron curator delegation fallback_providers kanban known_plugin_toolsets logging model_catalog platform_toolsets providers secrets security sessions skills tools toolsets
+agent approvals browser code_execution compression computer_use context credential_pool_strategies cron curator fallback_providers kanban platform_toolsets providers secrets security skills tools toolsets
 ```
 
 ### ② 按需合并 — 36 段
@@ -40,9 +40,14 @@ bedrock discord matrix mattermost openrouter slack telegram whatsapp x_search
 | 段 | 基线行数 | live 行数 |
 |---|---|---|
 | `tts` | 29 | 3 |
-| `terminal` | 24 | 1 |
 | `mcp_servers` | 93 | 73 |
+| `terminal` | 24 | 4 |
 | `command_allowlist` | 15 | 2 |
+| `delegation` | 14 | 2 |
+| `checkpoints` | 8 | 2 |
+| `sessions` | 5 | 2 |
+| `logging` | 6 | 4 |
+| `model_catalog` | 4 | 2 |
 | `memory` | 11 | 10 |
 
 ## 合并注意（三条红线）

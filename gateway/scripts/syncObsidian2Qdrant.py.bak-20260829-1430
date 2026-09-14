@@ -21,15 +21,8 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 from datetime import datetime
-# watchdog 惰性导入（2026-09-13）：cron 一次性同步模式(WATCHDOG_ENABLED=0)不需要 watchdog，
-# 缺这个包会导致整脚本 import 失败；改为按需导入，保证 cron 可用。
-try:
-    from watchdog.observers import Observer
-    from watchdog.events import FileSystemEventHandler
-except ImportError:  # pragma: no cover
-    Observer = None
-    class FileSystemEventHandler:  # type: ignore
-        pass
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -43,7 +36,7 @@ EMBEDDING_URL = os.environ.get('EMBEDDING_URL', 'http://embedding-llama:8000/v1/
 EMBEDDING_MODEL = os.environ.get('EMBEDDING_MODEL', 'bge-large-zh-v1.5')
 CHUNK_SIZE = int(os.environ.get('CHUNK_SIZE', '350'))   # bge 512 token ~380 中文字，取 350 安全
 WATCHDOG_ENABLED = os.environ.get('WATCHDOG_ENABLED', '1') == '1'
-EXCLUDE_PATTERNS = ('.obsidian', 'awesome-design-md', '/temp/', '/archive/')
+EXCLUDE_PATTERNS = ('.obsidian', 'awesome-design-md', '/temp/')
 
 
 def domain_for(rel: str) -> str:
@@ -110,7 +103,7 @@ class QdrantSyncHandler(FileSystemEventHandler):
         if not content.strip():
             return
         title = Path(filepath).stem
-        chunks = [content[i:i + CHUNK_SIZE] for i in range(0, len(content), CHUNK_SIZE)]
+        chunks = [content[i:i + CHUNK_SIZE] for i in range(0, len(content), CHUNK_SIZE)][:100]
         total = len(chunks)
         domain = domain_for(rel_path)
         for idx, chunk in enumerate(chunks):
@@ -197,11 +190,9 @@ def ensure_collection():
     vec = json.loads(resp.read())["data"][0]["embedding"]
     dim = len(vec)
 
-    # 修复(2026-09-14)：Qdrant 建集合必须 PUT /collections/{name} + {"vectors":{...}}；
-    # 原写法 PUT /collections + {"name":...} 返回 404 → 集合永远建不出来（cron 无人值守时更致命）
-    body = {"vectors": {"size": dim, "distance": "Cosine"}}
+    body = {"name": QDRANT_COLLECTION, "vectors": {"size": dim, "distance": "Cosine"}}
     req = urllib.request.Request(
-        f"http://{QDRANT_HOST}:{QDRANT_PORT}/collections/{QDRANT_COLLECTION}",
+        f"http://{QDRANT_HOST}:{QDRANT_PORT}/collections",
         data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json", "api-key": QDRANT_API_KEY},
         method="PUT")
