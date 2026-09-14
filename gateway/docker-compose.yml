@@ -784,7 +784,9 @@ services:
       - ${PWD}/data/hermes/workspace:/home/agent/.hermes-rt/workspace
       - ${PWD}/data/hermes/SOUL.md:/home/agent/.hermes-rt/SOUL.md
       - ${PWD}/data/hermes/config.yaml:/home/agent/.hermes-rt/config.yaml
-      - ${PWD}/data/hermes/.env:/home/agent/.hermes-rt/.env
+      # 2026-09-14 移除 .env 单文件 bind：单文件 bind = 挂载点，Hermes 保存 .env 用 tmp+os.replace 原子写，
+      # rename 覆盖挂载点必然 EBUSY → webui 每次写 .env 报 API 500。改由运行时卷承载普通文件(重建前由脚本播种)。
+      # 不影响 head：head 的 .env 在 hermes_data 命名卷，本就不是物理共享。config.yaml 是只读使用故保留 bind。
       - ${PWD}/data/hermes/auth.json:/home/agent/.hermes-rt/auth.json
       - ${PWD}/data/hermes/auth.lock:/home/agent/.hermes-rt/auth.lock
       - ${PWD}/data/hermes/install_id:/home/agent/.hermes-rt/install_id
