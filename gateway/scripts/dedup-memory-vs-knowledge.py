@@ -4,7 +4,7 @@
 流程（KB 治理规范：先审计 → 报数 → 导出回滚清单 → 分批删 → 复核）：
  1) scroll 出 hermes_memory 中 source=obsidian 的全部点（id + payload 摘要）
  2) 与 hermes_knowledge 求交，确认是「同源搬运」（同 id）
- 3) 导出回滚清单 JSON（含全量 id + payload 关键字段）到 /root/
+ 3) 导出回滚清单 JSON（含全量 id + payload 关键字段）到 /opt/data/rollback/（宿主持久）
  4) 按 id 分批（200/批）从 hermes_memory 删除
  5) 复核：两侧计数、抽样、知识集合内容完好
 
@@ -85,7 +85,9 @@ if DRY:
 
 # 3) 回滚清单
 ts = time.strftime("%Y%m%d-%H%M%S")
-rollback = f"/root/qdrant-dedup-rollback-{ts}.json"
+# 导出到**宿主持久目录**（/opt/data = 宿主 data/opt-data）；容器层 /root 在容器重建后会丢
+os.makedirs("/opt/data/rollback", exist_ok=True)
+rollback = f"/opt/data/rollback/qdrant-dedup-rollback-{ts}.json"
 with open(rollback, "w", encoding="utf-8") as fh:
     json.dump({
         "created_at": ts,

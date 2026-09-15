@@ -2,7 +2,7 @@
 # kb-lookup.sh —— 知识库三层检索（① Qdrant 语义 ② Obsidian 全文 ③ Dify 检索）
 #   用法: scripts/kb-lookup.sh "<查询词>" [topK]
 set -uo pipefail
-Q="${1:-}"; K="${2:-5}"
+Q="${1:-}"; K="${2:-5}"; TK=$(( ${2:-5} * 2 )); [ "$TK" -lt 10 ] && TK=10
 [ -n "$Q" ] || { echo "用法: $0 \"<查询词>\" [topK]"; exit 2; }
 VAULT=/home/user/gateway/data/obsidian/knowledge
 
@@ -60,7 +60,7 @@ else
     echo "  —— dataset ${ds:0:8}… ——"
     curl -s -m 20 -X POST "http://127.0.0.1:8090/v1/datasets/${ds}/retrieve" \
       -H "Authorization: Bearer ${DKEY}" -H 'Content-Type: application/json' \
-      -d "{\"query\":\"${Q}\",\"retrieval_model\":{\"search_method\":\"semantic_search\",\"reranking_enable\":false,\"score_threshold_enabled\":false,\"top_k\":${K}}}" \
+      -d "{\"query\":\"${Q}\",\"retrieval_model\":{\"search_method\":\"hybrid_search\",\"weights\":{\"keyword_setting\":{\"keyword_weight\":0.3},\"vector_setting\":{\"vector_weight\":0.7,\"embedding_provider_name\":\"\",\"embedding_model_name\":\"\"}},\"reranking_enable\":true,\"reranking_mode\":\"reranking_model\",\"reranking_model\":{\"reranking_provider_name\":\"langgenius/openai_api_compatible/openai_api_compatible\",\"reranking_model_name\":\"bge-reranker-v2-m3\"},\"score_threshold_enabled\":false,\"top_k\":${TK}}}" \
     | python3 -c "
 import json, sys
 try:

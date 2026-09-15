@@ -219,3 +219,49 @@ rmdir /home/user/gateway/data/hermes/auth.lock && : > /home/user/gateway/data/he
 # 卷内占位被建成了目录 → 同样处理
 rmdir /home/user/gateway/data/hermes-runtime/auth.lock && : > /home/user/gateway/data/hermes-runtime/auth.lock
 ```
+
+---
+
+---
+
+## 10. 已解决：改了 bind 源类型后，容器**快照层**里的旧目录（2026-09-15）
+
+**背景**：有两处单文件 bind **不在** `HERMES_HOME` 内，因此不受 §9 守卫 ①② 覆盖：
+
+    ./config/openclaude/.openclaude.json  →  /root/.openclaude.json
+    ./config/openclaude/settings.json     →  /root/.openclaude/settings.json
+
+2026-08-24 这四个位置（源侧 2 个 + 目标侧 2 个）都被 Docker 建成了**空目录**（源缺失时的老坑）。两层后果：
+
+1. openclaude 写配置报 `EISDIR: illegal operation on a directory, open '/root/.openclaude.json'`
+   → **静默零输出、exit 0**（不报错、不留日志的坑，排查很久）。
+2. 把宿主源由目录改成**真文件**后，`docker start` 直接失败：
+
+```
+error mounting "/home/user/gateway/config/openclaude/.openclaude.json" to rootfs at
+"/root/.openclaude.json": ... not a directory: Are you trying to mount a directory onto a file?
+```
+
+**根因**：Docker 首次建挂载点时会把目标写进**容器自身的快照层**（本机 = containerd 快照器）：
+
+    /srv/docker/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/<id>/fs/root/.openclaude.json   ← 目录
+
+源侧类型改了，快照层里那个目录**不会自动跟着变** → 类型不匹配。
+
+**处置**：
+
+1. 源侧改成真文件（`.openclaude.json` = `{}`；`settings.json` = provider 配置；均为 `600 root:root`，JSON 合法）。
+2. 守卫 `scripts/ensure-rt-file-binds.sh` 新增 **③ 快照层陈旧目录清理**：仅在容器**已停止**时，
+   对「源已是文件」的每一处 bind，删除快照 `fs/<目标路径>` 下的**空目录**（用 `rmdir`，非空会失败⇒不会误删）。
+
+**探针证据**（独立容器 + 独立路径，不碰 hermes）：
+
+| 步骤 | 结果 |
+|---|---|
+| 用目录当源启动 | 容器内 `drwxr-xr-x` |
+| 源改文件后直接 `start` | ❌ 复现 `not a directory: Are you trying to mount a directory onto a file` |
+| 删掉快照内空目录后再 `start` | ✅ 成功；容器内变 `-rw-r--r--`，内容 `{"probe": true}` |
+
+**纪律**：① 单文件 bind 的**源必须是文件**（不要让 Docker 替你在源侧建目录）；
+② 改源类型后**必须**走 `restart.sh`（守卫在 stop 之后会清快照）或 `docker compose up -d <服务>`（重建＝新快照）；
+③ 裸 `docker start` 会失败 —— 这是预期行为，不是新故障，按 ② 处理即可。
