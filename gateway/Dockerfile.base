@@ -161,18 +161,38 @@ RUN export PATH="/usr/local/bin:$PATH" && \
         @marp-team/marp-cli \
         chrome-devtools-mcp \
         agent-browser \
-        @colbymchenry/codegraph \
         "playwright@${PLAYWRIGHT_VERSION}" \
         pptxgenjs \
         sharp \
         pdf-lib && \
-    ln -sf "$(npm root -g)/@colbymchenry/codegraph/npm-shim.js" /usr/local/bin/codegraph && \
     ln -sf /usr/local/bin/node /usr/bin/node && \
     ln -sf /usr/local/bin/npm /usr/bin/npm && \
     ln -sf /usr/local/bin/npx /usr/bin/npx && \
     agent-browser --version && \
-    codegraph --version && \
     npm cache clean --force
+
+# ============================================
+# 5.1) codegraph —— 单装，且必须走官方源 registry.npmjs.org
+# ------------------------------------------------------------
+# 为什么不能并入上面那条、也不能用 npmmirror：
+#   codegraph 的重物（~230MB 自包含 bundle）以 per-platform optionalDependency
+#   @colbymchenry/codegraph-linux-x64 分发（esbuild 模式）。npmmirror 对该平台包
+#   只镜像到 1.4.1（2026-09-15 查证），而主包 latest 已是 1.6.0 →
+#   npm 把「取不到的可选依赖」视为成功、静默跳过（日志只 added 1 package）→
+#   npm-shim 回落到 GitHub Releases 下载（本机 github.com 被阻断）→ 连接超时 →
+#   `codegraph --version` 返回非 0 → 整层构建失败。
+#   registry.npmjs.org 直连实测可用（HTTP 200；装包 ~12s；added 2 packages），故单独指定。
+# 校验方式：CODEGRAPH_NO_DOWNLOAD=1 + 一个空的 CODEGRAPH_INSTALL_DIR
+#   —— 强制只用 npm 包自带的 bundle：不读 /root/.codegraph 缓存、不许联网兜底。
+#      平台包真缺了立即非 0 退出，不会「偷偷下载成功」而假通过。
+# 应急：若日后 npmjs 不可达（代理没开 / 网络收紧），可改为 pin npmmirror 已镜像的版本
+#   （@colbymchenry/codegraph@1.4.1）或给构建挂代理——两条路都只改这一行。
+# ============================================
+RUN export PATH="/usr/local/bin:$PATH" && \
+    npm install -g @colbymchenry/codegraph --registry=https://registry.npmjs.org && \
+    ln -sf "$(npm root -g)/@colbymchenry/codegraph/npm-shim.js" /usr/local/bin/codegraph && \
+    CODEGRAPH_NO_DOWNLOAD=1 CODEGRAPH_INSTALL_DIR=/tmp/codegraph-verify codegraph --version && \
+    rm -rf /tmp/codegraph-verify
 
 # ============================================
 # 6) Chromium（单一 revision；两容器共用 PLAYWRIGHT_BROWSERS_PATH）
