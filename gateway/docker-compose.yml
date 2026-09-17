@@ -613,6 +613,11 @@ services:
 #    image: hermes-agent:v2026.8.18
     container_name: hermes
     restart: unless-stopped
+    # 2026-09-18：固定 DNS，宿主休眠唤醒后不再依赖「容器创建时的上游快照」
+    dns:
+      - 223.5.5.5
+      - 119.29.29.29
+      - 114.114.114.114
     ports:
       - "8642:8642"     # API Server 端口
       - "9119:9119"     # Dashboard 端口
@@ -755,6 +760,11 @@ services:
     stop_grace_period: 30s
     image: ${WEBUI_IMAGE:-hermes-web-ui:0.7.22}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
+    # 2026-09-18：固定 DNS（同上）
+    dns:
+      - 223.5.5.5
+      - 119.29.29.29
+      - 114.114.114.114
 #    user: "${UID:-1000}:${GID:-1000}"
     ports:
       - "${PORT:-6060}:${PORT:-6060}"
