@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 
 TAG_BASE=${TAG_BASE:-hermes-base:main}
 TAG_HERMES=${TAG_HERMES:-hermes-agent:main}
-TAG_WEBUI=${WEBUI_IMAGE:-hermes-web-ui:0.7.19}
+TAG_WEBUI=${WEBUI_IMAGE:-hermes-web-ui:0.7.22}
 TARGET=${1:-all}
 
 build_base() {

@@ -753,7 +753,7 @@ services:
 
   hermes-webui:
     stop_grace_period: 30s
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.7.21}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.7.22}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
 #    user: "${UID:-1000}:${GID:-1000}"
     ports:
