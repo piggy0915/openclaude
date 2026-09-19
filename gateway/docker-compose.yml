@@ -1017,6 +1017,26 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ========== Prompt Optimizer（2026-09-19）：A 路线 = Web GUI + HTTP MCP ==========
+  # 用途：浏览器里人工优化提示词；HTTP MCP 端点 http://prompt-optimizer:8081/mcp
+  # 资源上锁：0.5 核 / 512M（沿用 dify 服务的 deploy.resources.limits 写法）
+  prompt-optimizer:
+    image: linshen/prompt-optimizer:latest
+    container_name: prompt-optimizer
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    env_file:
+      - ./config/prompt-optimizer.env
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    networks:
+      - rag-network
+
+
 volumes:
   opt_data_volume:
     name: opt_data

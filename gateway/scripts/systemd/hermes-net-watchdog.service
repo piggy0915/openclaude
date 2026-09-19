@@ -1,0 +1,10 @@
+[Unit]
+Description=Hermes 网络/DNS 看门狗（休眠唤醒自愈）
+Documentation=file:/home/user/gateway/docs/sleep-wake-recovery.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/user/gateway/scripts/net-watchdog.sh --cycle
+Nice=5
