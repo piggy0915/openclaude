@@ -22,6 +22,11 @@ MAX_LADDER_PER_HOUR="${MAX_LADDER_PER_HOUR:-3}"
 THROTTLE_WINDOW="${THROTTLE_WINDOW:-600}"        # 同一句「跳过」日志最小间隔（秒）
 DOCKER_UPTIME_GUARD="${DOCKER_UPTIME_GUARD:-90}" # dockerd 启动后多久内不动手
 TIME_MAX_OFFSET="${TIME_MAX_OFFSET:-30}"         # 校时阈值：NTP 偏差超过多少秒才强制校时
+IDE_TUNNEL_UNIT="${IDE_TUNNEL_UNIT:-hermes-ide-mcp-tunnel}"  # Win11 IDEA MCP 的 SSH 隧道 systemd 单元
+IDE_TUNNEL_HOST="${IDE_TUNNEL_HOST:-172.17.0.1}"
+IDE_TUNNEL_PORT="${IDE_TUNNEL_PORT:-16434}"
+IDE_TUNNEL_HOSTHDR="${IDE_TUNNEL_HOSTHDR:-127.0.0.1:64342}"  # 经隧道探活时用的 Host 头（IDE 校验）
+TUNNEL_COOLDOWN="${TUNNEL_COOLDOWN:-600}"        # 隧道重建冷却（秒），防热循环
 STATE_DIR="/run/hermes-net-watchdog"
 LOG="/var/log/hermes-net-watchdog.log"
 PAUSE_FILE="${PAUSE_FILE:-/home/user/gateway/.net-watchdog-pause}"
@@ -88,6 +93,44 @@ fix_clock(){
     hwclock --systohc >/dev/null 2>&1
   fi
   log "校时完成（现偏移 $(ntp_offset)s）"
+}
+
+# ---------------- IDE 隧道健康（Hermes → Win11 IDEA MCP）----------------
+# 隧道断了不影响模型连通性，但会让 IDEA 的 56 个工具失效；这里独立于修复阶梯，带冷却重建。
+# 注意：本地端口在听 ≠ 远端可用（IDEA 关掉时 ssh 的 -L 监听仍在）→ 因此分两级判定：
+#   · 本地无监听            → 重启 unit
+#   · 本地在听但远端无响应   → 只提示（多半 IDEA 未运行/MCP 未启用），不重启，避免无意义循环
+ide_tunnel_local(){ timeout 3 bash -c "cat </dev/null >/dev/tcp/${IDE_TUNNEL_HOST}/${IDE_TUNNEL_PORT}" >/dev/null 2>&1; }
+ide_tunnel_probe(){
+  python3 -c "
+import socket
+try:
+    s = socket.create_connection(('$IDE_TUNNEL_HOST', $IDE_TUNNEL_PORT), 5)
+    s.sendall(b'POST /stream HTTP/1.1\r\nHost: $IDE_TUNNEL_HOSTHDR\r\nAccept: application/json, text/event-stream\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}')
+    s.settimeout(5)
+    print('alive' if s.recv(32) else 'no-response')
+    s.close()
+except Exception:
+    print('unreachable')
+" 2>/dev/null
+}
+ide_tunnel_check(){
+  [ -f "/etc/systemd/system/${IDE_TUNNEL_UNIT}.service" ] || return 0
+  local force="${1:-}" now last f="$STATE_DIR/last_tunnel_restart"
+  if ! ide_tunnel_local; then
+    now=$(date +%s); last=$(cat "$f" 2>/dev/null || echo 0)
+    if [ "$force" != "force" ] && [ $(( now - last )) -lt "$TUNNEL_COOLDOWN" ]; then return 0; fi
+    echo "$now" > "$f"
+    log "IDE 隧道本地端口 ${IDE_TUNNEL_HOST}:${IDE_TUNNEL_PORT} 无监听 → 重启 ${IDE_TUNNEL_UNIT}"
+    act systemctl restart "$IDE_TUNNEL_UNIT" >/dev/null 2>&1
+    nap 3
+    if ide_tunnel_local; then log "IDE 隧道已重建（本地监听恢复）"; else log "IDE 隧道重建失败，需人工介入"; fi
+    return 0
+  fi
+  case "$(ide_tunnel_probe)" in
+    alive) : ;;
+    *) log_throttled "IDE 隧道本地在听但远端无响应 → 多半是 Win11 上 IDEA 未运行或 MCP Server 未勾选（隧道不重启；IDEA 一开即自动恢复）" ;;
+  esac
 }
 
 # ---------------- 护栏（不打扰）----------------
@@ -176,6 +219,7 @@ do_check(){
 }
 do_cycle(){
   docker info >/dev/null 2>&1 || { log_throttled "docker 未运行，跳过本轮"; return 0; }
+  ide_tunnel_check
   local why; why=$(guards_block || true)
   if [ -n "$why" ]; then log_throttled "跳过本轮：$why（不计失败）"; return 0; fi
   if ok_now; then
@@ -192,7 +236,7 @@ do_fix_wake(){
   log "唤醒钩子触发：等待网络就绪（最多 ${WAKE_WAIT_MAX}s）"
   local waited=0 why
   while [ "$waited" -lt "$WAKE_WAIT_MAX" ]; do
-    if ok_now; then fix_clock; log "唤醒后 ${waited}s 内自愈，无需网络动作"; reset_failcount; return 0; fi
+    if ok_now; then ide_tunnel_check force; fix_clock; log "唤醒后 ${waited}s 内自愈，无需网络动作"; reset_failcount; return 0; fi
     why=$(guards_block || true)
     if [ -n "$why" ]; then log "唤醒钩子按护栏退出：$why"; fix_clock; return 0; fi
     sleep "$WAIT_STEP"; waited=$(( waited + WAIT_STEP ))
@@ -218,6 +262,7 @@ do_status(){
   do_guards
   do_check
   echo "NTP 偏移=$(ntp_offset)s"
+  echo "IDE 隧道: local=$(ide_tunnel_local && echo up || echo DOWN) remote=$(ide_tunnel_local && ide_tunnel_probe || echo n/a)（单元 active=$(systemctl is-active ${IDE_TUNNEL_UNIT} 2>/dev/null)）"
   echo "ladder_history=$(ladder_history | tr '\n' ',')"
   echo "--- 最近日志 ---"; tail -n 10 "$LOG" 2>/dev/null || echo "(无)"
 }

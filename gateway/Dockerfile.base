@@ -94,9 +94,7 @@ RUN ARCH=$(dpkg --print-architecture) \
 
 # ============================================
 # 4) Python 环境与依赖
-# ============================================
 RUN python3 -m venv /opt/hermes/.venv
-
 RUN /opt/hermes/.venv/bin/pip install \
         --index-url ${PIP_INDEX} \
         --extra-index-url ${PIP_EXTRA_INDEX} \
@@ -121,10 +119,33 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
         "playwright==${PLAYWRIGHT_VERSION}" \
         'websocket-client>=1.9.0'
 
+# 2026-09-20：crawl4ai 钉版 ≥0.9.0。
+#   0.6.3 存在 7 条 CRITICAL + 6 条 HIGH（未认证 RCE / 任意文件写 / SSRF / 凭据外泄等），
+#   修复版见 OSV：0.8.0 / 0.8.7 / 0.9.0（本轮全量审计发现）。
+#   说明：本栈未启用 crawl4ai 插件（config.yaml plugins.enabled 无它）、也无代码 import 它，
+#   该包来自 plugin-catalog 的社区插件 hermes-plugin-crawl4ai（需外部 CRAWL4AI_URL 实例）；
+#   保留包体但钉到已修复版本，若确认永不使用可整行删除。
+# ============================================
+
 RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
         --index-url ${PIP_EXTRA_INDEX} \
         --extra-index-url ${PIP_INDEX} \
-        'crawl4ai'
+        --index-strategy unsafe-best-match \
+        'crawl4ai>=0.9.3'
+
+# 2026-09-20（安全审计第 2 轮）：把「能被安全钉版修掉」的两个包放到所有 pip 安装之后，
+# 做一次**最终加固**（避免前面 crawl4ai 等安装把版本带回去）：
+#   anyio>=4.14.2  —— 修复 GHSA-82r6-8w77-94w6（CRITICAL：TLSStream IDNA 2003 主机名编码 → 证书欺骗）
+#   pip>=26.2.0    —— 修复 5 条 MODERATE（tar 解压路径穿越/符号链接等）
+# 说明（刻意**不**钉的，理由已核实）：
+#   httpx2 / httpcore2 —— 上游硬钉 `httpx2==2.7.0`（pyproject.toml:279/290、tools/lazy_deps.py:201），
+#                        且 mcp 2.0 SDK 直接 `import httpx2`；改动会破坏上游约束与 MCP HTTP 栈 → 接受。
+#   nltk 3.10.3        —— OSV 无修复版 → 接受（触发路径为"模型制品 API"，本栈不用）。
+#   wheel 0.46.1       —— 系统包（Debian python3-wheel 0.46.1-2 已是源内最新，无 0.46.2）→ 接受。
+RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
+        --index-url ${PIP_INDEX} \
+        'anyio>=4.14.2' \
+        'pip>=26.2.0'
 
 # firecrawl-anydoc 为 Rust 原生包，pip 处理更好
 RUN /opt/hermes/.venv/bin/pip install firecrawl-anydoc --index-url ${PIP_EXTRA_INDEX}
@@ -195,6 +216,61 @@ RUN export PATH="/usr/local/bin:$PATH" && \
     rm -rf /tmp/codegraph-verify
 
 # ============================================
+# 5.2) 编码工具链固化：OpenCodeReview(ocr) + Reasonix 运行环境
+# ------------------------------------------------------------
+# 为什么单独一装、且必须 --registry=https://registry.npmjs.org：
+#   @alibaba-group/open-code-review 与 codegraph 同款 —— 平台二进制走
+#   per-platform optionalDependency（@alibaba-group/ocr-linux-x64 等），而镜像里
+#   NPM_CONFIG_REGISTRY=https://registry.npmmirror.com 常漏镜像平台包 →
+#   npm 把「取不到的可选依赖」当成功静默跳过 → 运行时报缺二进制。
+#   官方源实测可直连（装完 ocr --version 正常）。
+# 为什么配置不写进镜像：
+#   /opt/data 是持久卷（compose opt_data_volume），构建期写在里面的东西运行时会被
+#   卷遮蔽 → 白写。故镜像只放「模板 + 引导脚本」，密钥在容器启动时由环境变量注入
+#   （DEEPSEEK_API_KEY，两个容器均已注入），见 coding-agents/bootstrap.sh。
+# ============================================
+ENV REASONIX_HOME=/opt/data/reasonix
+RUN export PATH="/usr/local/bin:$PATH" && \
+    npm install -g @alibaba-group/open-code-review@1.12.7 \
+        --registry=https://registry.npmjs.org && \
+    ocr --version && \
+    npm cache clean --force
+
+COPY coding-agents/bootstrap.sh coding-agents/run-bootstrap.sh coding-agents/reasonix-config.toml /opt/hermes/coding-agents/
+RUN chmod +x /opt/hermes/coding-agents/bootstrap.sh /opt/hermes/coding-agents/run-bootstrap.sh && \
+    rm -rf /root/.reasonix /root/.opencodereview && \
+    ln -s /opt/data/reasonix /root/.reasonix && \
+    ln -s /opt/data/opencodereview /root/.opencodereview
+
+# ============================================
+# 5.3) LoopX —— 长周期 agent 控制平面 CLI（2026-09-21）
+# ------------------------------------------------------------
+# 是什么：开源（Apache-2.0，loopx-project/loopx）的「loop engineering」控制平面，
+#   跑在 Codex / Claude Code / OpenCode / KunlunCode 之上执行有界的一步，
+#   自己管 goal / gate / todo / evidence / quota / handoff 的**耐久状态**；
+#   Hermes 只当调度与渠道，不替代它执行。
+# 为什么进基座：与 openclaude / reasonix / ocr 同一约定 —— 工具链统一在 hermes-base，
+#   派生镜像禁止另装一份（见本文件头注释）。
+# 为什么用 ${PIP_EXTRA_INDEX}(pypi.org) 而非 ${PIP_INDEX}(tuna)：
+#   实测 tuna 索引对本包滞后（uv 只解析到 1.0.0），1.1.0 仅在官方源可取。
+# 为什么要软链到 /usr/local/bin：
+#   `docker exec hermes bash -lc 'loopx ...'` 的登录 shell 会重置 PATH，
+#   /opt/hermes/.venv/bin 不在其中（实测 command not found）→ 软链到 /usr/local/bin
+#   （与 npm 全局工具同一目录，agent 侧调用零配置）。
+# 状态目录（实测）：
+#   全局注册表 ~/.codex/loopx/registry.global.json（由 compose 挂持久卷保住）；
+#   项目内    <project>/.loopx/registry.json + <project>/.codex/goals/<goal>/ACTIVE_GOAL_STATE.md
+#             → 需把 .loopx/ 与 .codex/goals/ 写进项目 .gitignore（loopx 自身也会提示）。
+# wheel 另带入口：loopx-kunluncode / loopx-lark-provider / loopx-openviking-*
+# ============================================
+RUN /opt/hermes/.venv/bin/pip install --no-cache-dir \
+        --index-url ${PIP_EXTRA_INDEX} \
+        'loopx==1.1.0' && \
+    ln -sf /opt/hermes/.venv/bin/loopx /usr/local/bin/loopx && \
+    loopx --version && \
+    command -v loopx
+
+# ============================================
 # 6) Chromium（单一 revision；两容器共用 PLAYWRIGHT_BROWSERS_PATH）
 # ============================================
 RUN mkdir -p /opt/hermes/.playwright && \
@@ -225,6 +301,30 @@ RUN CHROMIUM_REV=$(/opt/hermes/.venv/bin/python3 -c "import json,glob;print(next
         case "$d" in *-"$CHROMIUM_REV") echo "keep $d" ;; *) echo "remove stale $d"; rm -rf "$d" ;; esac; \
     done && \
     ls -la /opt/hermes/.playwright/
+
+# ============================================
+# 6.2) dev-browser（SawyerHood/dev-browser, MIT）—— 包 + daemon 依赖一起固化进镜像
+# ------------------------------------------------------------
+# 背景（用户实测反馈）：原先它只装在共享卷（/opt/data/npm-global），而 $HOME/.dev-browser（25MB）
+#   与它自带的 chromium-1208（~110MB）都落在**容器层** → 每次 recreate 都要重装 + 重下 110MB。
+# 做法：
+#   ① 包钉 0.2.9 装进镜像（官方源；该包纯 JS，无 per-platform 陷阱）
+#   ② 用 DEV_BROWSER_CHROME 指镜像内 Chromium：决定**运行时**用哪个 Chrome（本栈与 CDP Chrome 统一到 chromium-1234）。
+#      注意（实测）：`install` **仍会**拉它自带 playwright 的 chromium-1208（~110MB）——DEV_BROWSER_CHROME 拦不住它。
+#      这正是要固化进镜像的原因：**只在构建期付一次**，之后每次 recreate 都不再重装/重下。
+#   ③ 复制一份到 /home/agent/.dev-browser：webui 容器 HOME=/home/agent，否则那边仍会自装
+#   ④ 清掉 daemon.pid / daemon.sock / daemon-spawn.lock：运行时残留不该进镜像
+# ============================================
+RUN npm install -g dev-browser@0.2.9 --registry=https://registry.npmjs.org && \
+    DEV_BROWSER_CHROME="$(ls -d /opt/hermes/.playwright/chromium-*/chrome-linux64/chrome | sort -V | tail -1)" && \
+    echo "dev-browser 使用 Chromium: $DEV_BROWSER_CHROME" && \
+    DEV_BROWSER_CHROME="$DEV_BROWSER_CHROME" dev-browser install && \
+    test -s /root/.dev-browser/daemon.mjs && \
+    rm -f /root/.dev-browser/daemon.pid /root/.dev-browser/daemon.sock /root/.dev-browser/daemon-spawn.lock && \
+    mkdir -p /home/agent && cp -a /root/.dev-browser /home/agent/.dev-browser && \
+    (chown -R 10000:10000 /home/agent/.dev-browser 2>/dev/null || true) && \
+    ls -d /root/.dev-browser /home/agent/.dev-browser && \
+    du -sh /root/.dev-browser
 
 # ============================================
 # 7) Ekko Studio MCP（自包含单文件，两容器共用；不再依赖宿主 /app）
@@ -308,4 +408,4 @@ RUN mkdir -p /home/agent/.local/bin && \
     printf 'export PYTHONPATH="/opt/hermes${PYTHONPATH:+:${PYTHONPATH}}"\n' >> /etc/profile.d/hermes.sh && \
     printf 'export PYTHONPATH="/opt/hermes${PYTHONPATH:+:${PYTHONPATH}}"\n' >> /home/agent/.bashrc
 
-ENV PATH=/opt/hermes/.venv/bin:/home/agent/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV PATH=/opt/hermes/.venv/bin:/home/agent/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/data/npm-global/bin

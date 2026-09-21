@@ -121,5 +121,17 @@ export PATH="/home/agent/.local/bin:$PATH"
 #   且 10000 无法进入 /root(0700) → 该容器的 SSH 终端后端不可用。
 #   两容器统一为 root 后冲突消失（agent 本就在 webui 容器以 root 执行，无新增暴露面）。
 #   compose 已设 HERMES_ALLOW_ROOT_GATEWAY=1。
+
+# —— 编码工具链引导（2026-09-19；v4 镜像薄壳优先）——
+# 首选镜像内薄壳 /opt/hermes/coding-agents/run-bootstrap.sh（自包含：卷没挂也能跑），
+# 它内部再优先 exec 卷内 /opt/data/coding-agents/bootstrap.sh（改行为不必重建镜像）；
+# 镜像内缺失时（未重建的旧镜像）回退卷内薄壳。幂等、无密钥、失败不阻断启动（if 块规避 set -e）。
+CA_BS=/opt/hermes/coding-agents/run-bootstrap.sh
+[ -x "$CA_BS" ] || CA_BS=/opt/data/coding-agents/run-bootstrap.sh
+if [ -x "$CA_BS" ]; then
+    "$CA_BS" || echo "⚠ coding-agents bootstrap 失败（不阻断启动）"
+else
+    echo "ℹ coding-agents bootstrap 未安装（跳过引导）"
+fi
 echo "=== Starting Hermes gateway (uid=$(id -u)) ==="
 exec /opt/hermes/.venv/bin/hermes gateway run

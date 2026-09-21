@@ -640,6 +640,9 @@ services:
 #      - ./data/obsidian/knowledge:/knowledge_base/obsidian:rw
 
       - opt_data_volume:/opt/data:rw
+      # LoopX 全局状态（2026-09-21）：注册表落在 ~/.codex/loopx（实测 CODEX_HOME /
+      # LOOPX_RUNTIME_ROOT 都无法改位），挂出来才能在容器重建后不丢项目注册表。
+      - ./data/hermes/loopx:/root/.codex/loopx
       # 2026-09-11 移除：/app 改由镜像提供；Ekko MCP 已固化 /opt/ekko/bin
       # - app_volume:/app:rw
 #      - openclaude_volume:/root/.openclaude
@@ -689,7 +692,7 @@ services:
       - HERMES_PLUGINS_ENABLED=true
       - HERMES_PLUGINS_DIR=/opt/hermes/plugins
       - CLAUDE_PLUGINS_DIR=/root/.hermes/plugins
-      - PATH=/opt/hermes/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - PATH=/opt/hermes/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/data/npm-global/bin
       - PYTHONPATH=/opt/hermes/.venv/lib/python3.13/site-packages
       - AUTOLOAD_PLUGINS=true
 
@@ -745,8 +748,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
-          memory: 8G
+          cpus: '6.0'
+          memory: 12G
         reservations:
           cpus: '1.0'
           memory: 2G
@@ -825,12 +828,12 @@ services:
       - AGENT_BROWSER_BIN=/usr/local/bin/agent-browser
       - HERMES_WEB_UI_AUTH_JWT_EXPIRES_IN=${HERMES_WEB_UI_AUTH_JWT_EXPIRES_IN:-30d}
       - HERMES_WEB_UI_XAI_CALLBACK_BIND_HOST=0.0.0.0
-      - HERMES_PATCH_SCRIPT=${HERMES_PATCH_SCRIPT:-}
+      - HERMES_PATCH_SCRIPT=${HERMES_PATCH_SCRIPT:-/opt/hermes/coding-agents/run-bootstrap.sh}
       - HERMES_LAN_ADVERTISE_URL=${HERMES_LAN_ADVERTISE_URL:-}
       - HERMES_APP_ENTITLEMENT_REQUIRED=${HERMES_APP_ENTITLEMENT_REQUIRED:-true}
       - HERMES_APP_ENTITLEMENT_PUBLIC_KEY=${HERMES_APP_ENTITLEMENT_PUBLIC_KEY:-}
       - NPM_CONFIG_PREFIX=/home/agent/.hermes-web-ui/coding-agent/npm
-      - PATH=/home/agent/.hermes-web-ui/coding-agent/npm/bin:/opt/hermes/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - PATH=/home/agent/.hermes-web-ui/coding-agent/npm/bin:/opt/hermes/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/data/npm-global/bin
       - AUTH_DISABLED=${AUTH_DISABLED:-false}
       - HERMES_ALLOW_ROOT_GATEWAY=1
 #      # 🔧 强制使用 API 模式，禁用 Bridge
@@ -1025,7 +1028,7 @@ services:
     container_name: prompt-optimizer
     restart: unless-stopped
     ports:
-      - "8081:80"
+      - "8081:8081"
     env_file:
       - ./config/prompt-optimizer.env
     deploy:
