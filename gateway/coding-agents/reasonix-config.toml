@@ -1,0 +1,20 @@
+# Reasonix 配置（2026-09-19，Hermes 栈落地）
+# 解析顺序：flag > ./reasonix.toml > ~/.reasonix/config.toml > 内置默认
+# 密钥不放这里：由 Reasonix 全局 .env 提供（本目录下 .env，含 DEEPSEEK_API_KEY）
+config_version = 10
+default_model = "deepseek-flash"
+language = "zh"
+
+[agent]
+temperature = 0.0
+compact_ratio = 0.8
+
+[permissions]
+# 非交互调用（Hermes → reasonix run）不能卡在确认上；容器本身已是隔离边界
+mode = "allow"
+
+[sandbox]
+# 容器内 bubblewrap 无法创建命名空间（实测：bwrap: Creating new namespace failed: Operation not permitted）
+# → 关闭 OS 级 bash 沙箱，否则 reasonix 会拒绝执行 bash（编码 agent 不可用）
+bash = "off"
+network = true
