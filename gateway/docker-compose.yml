@@ -761,7 +761,7 @@ services:
 
   hermes-webui:
     stop_grace_period: 30s
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.7.23}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.7.24}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
     # 2026-09-18：固定 DNS（同上）
     dns:
