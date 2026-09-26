@@ -83,8 +83,16 @@ if [ -n "${AGENTCHAT_CHROME_CDP:-}" ] && [ "${AGENTCHAT_CHROME_CDP}" != "0" ]; t
     echo "=== Starting CDP Chrome (AGENTCHAT_CHROME_CDP=${AGENTCHAT_CHROME_CDP}) ==="
     export DISPLAY=:99
     pgrep -x Xvfb >/dev/null 2>&1 || { Xvfb :99 -screen 0 1280x800x24 -ac >/dev/null 2>&1 & sleep 2; }
-    CHROME="$(ls -d /opt/hermes/.playwright/chromium-*/chrome-linux64/chrome 2>/dev/null | head -1)"
+    # 2026-09-20：dev-browser 会往同一目录装自己的 chromium-1208 → head -1 会选到它（旧版）；
+      # 改为取版本最高者，保证 CDP Chrome 用镜像内那套（Chrome 151）。
+      CHROME="$(ls -d /opt/hermes/.playwright/chromium-*/chrome-linux64/chrome 2>/dev/null | sort -V | tail -1)"
     if [ -n "$CHROME" ] && ! curl -s -m 2 http://127.0.0.1:9222/json/version >/dev/null 2>&1; then
+        # 2026-09-20 自愈：容器重建/重启后 /opt/data/chrome-profile 会残留上一实例的 Singleton 锁，
+        # 新 Chrome 会报 process_singleton_posix: "The profile appears to be in use …" 并直接退出。
+        # 仅在确认没有 chrome 存活时清锁（避免误删活锁）。
+        if ! pgrep -f "chrome-linux64/chrome" >/dev/null 2>&1; then
+            rm -f /opt/data/chrome-profile/Singleton* 2>/dev/null || true
+        fi
         mkdir -p /opt/data/chrome-profile
         nohup "$CHROME" \
             --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 \
@@ -134,4 +142,20 @@ else
     echo "ℹ coding-agents bootstrap 未安装（跳过引导）"
 fi
 echo "=== Starting Hermes gateway (uid=$(id -u)) ==="
+# ── 上游 config 迁移器（2026-09-26 补）────────────────────────────────
+# 上游 docker/stage2-hook.sh 会在每次 boot 执行 docker_config_migrate.py：
+#   config 键名/结构迁移 + 自动备份到 backups/config/（幂等、可 HERMES_SKIP_CONFIG_MIGRATION 关闭）。
+# 本栈用自研 entrypoint（无 s6 stage2）→ 这里补上，否则上游改 config 结构时我们的配置会静默不生效。
+# 以 uid 10000(hermes) 运行，保证生成物属主与 config.yaml 一致；失败不阻断启动。
+if [ -f /opt/hermes/scripts/docker_config_migrate.py ] && [ -z "${HERMES_SKIP_CONFIG_MIGRATION:-}" ]; then
+    echo "=== config migration (docker_config_migrate.py) ==="
+    MIGRATE_CMD="/opt/hermes/.venv/bin/python3 /opt/hermes/scripts/docker_config_migrate.py"
+    if command -v setpriv >/dev/null 2>&1; then
+        setpriv --reuid=10000 --regid=10000 --clear-groups $MIGRATE_CMD 2>&1 | sed 's/^/[config-migrate] /'
+    else
+        $MIGRATE_CMD 2>&1 | sed 's/^/[config-migrate] /'
+    fi
+    echo "[config-migrate] done（失败不阻断；配置有 10 分钟快照可回滚）"
+fi
+
 exec /opt/hermes/.venv/bin/hermes gateway run

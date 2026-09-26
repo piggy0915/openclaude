@@ -59,7 +59,7 @@ def did_from_sha(sha: str) -> str:
 
 
 def did_from_text(content: str) -> str:
-    return did_from_sha(hashlib.sha1(content.strip().encode("utf-8")).hexdigest())
+    return did_from_sha(hashlib.sha1(content.strip().encode("utf-8"), usedforsecurity=False).hexdigest())
 
 
 def main():

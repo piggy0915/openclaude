@@ -94,7 +94,7 @@ def main():
     coll, points = p._client.upserts[0]
     pt = points[0]
     pl = pt.payload
-    exp_sha = hashlib.sha1(long_content.strip().encode("utf-8")).hexdigest()
+    exp_sha = hashlib.sha1(long_content.strip().encode("utf-8"), usedforsecurity=False).hexdigest()
     exp_id = str(uuid.uuid5(NS, exp_sha))
 
     print(f"  upsert 集合: {coll} / 点数 {len(points)}")

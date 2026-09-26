@@ -41,7 +41,9 @@ LOG_PATH = "/var/log/hermes-webui-sync.log"
 KEEP_BACKUPS = 30
 
 # config.yaml 只同步这些顶层段（网页端会改的设置）；其余段（brain 运行时/宿主相关）一律保留脑侧值。
-CONFIG_SYNC_KEYS = ("model", "custom_providers", "tts", "memory", "mcp_servers")
+# 2026-09-25：配置迁移 custom_providers(list) → providers(dict)，同步段跟着改；
+# custom_providers 保留一段过渡（键已不存在，空跑无害）。
+CONFIG_SYNC_KEYS = ("model", "providers", "custom_providers", "tts", "memory", "mcp_servers")
 
 TOP_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):")
 

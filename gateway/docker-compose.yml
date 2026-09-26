@@ -610,6 +610,7 @@ services:
   hermes:
     stop_grace_period: 30s
     image: hermes-agent:main
+#    image: hermes-agent:main-desktop   # Bot Screen 桌面变体（官方 :main-desktop → ./build.sh all）
 #    image: hermes-agent:v2026.8.18
     container_name: hermes
     restart: unless-stopped
@@ -693,7 +694,7 @@ services:
       - HERMES_PLUGINS_DIR=/opt/hermes/plugins
       - CLAUDE_PLUGINS_DIR=/root/.hermes/plugins
       - PATH=/opt/hermes/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/data/npm-global/bin
-      - PYTHONPATH=/opt/hermes/.venv/lib/python3.13/site-packages
+      - PYTHONPATH=/opt/hermes/.venv/lib/python3.14/site-packages
       - AUTOLOAD_PLUGINS=true
 
       - PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright

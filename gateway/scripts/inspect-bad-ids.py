@@ -29,7 +29,7 @@ def variants(content):
         ("content.rstrip()", content.rstrip()),
         ("content.lstrip()", content.lstrip()),
     ]:
-        out[f"sha1(utf8 {label})"] = hashlib.sha1(text.encode("utf-8")).hexdigest()
+        out[f"sha1(utf8 {label})"] = hashlib.sha1(text.encode("utf-8"), usedforsecurity=False).hexdigest()
     return out
 
 
@@ -51,7 +51,7 @@ def main():
         csha = str(pl.get("content_sha1") or "").strip()
         if csha:
             continue
-        if str(p.id) == str(uuid.uuid5(NS, hashlib.sha1(content.strip().encode()).hexdigest())):
+        if str(p.id) == str(uuid.uuid5(NS, hashlib.sha1(content.strip().encode(), usedforsecurity=False).hexdigest())):
             continue
         if len(content) >= 2000:
             continue

@@ -27,7 +27,7 @@ for p in pts:
     body = str(pl.get("content") or pl.get("text") or "").strip()
     if not body:
         continue                      # 空内容不参与去重（避免误删）
-    key = str(pl.get("content_sha1") or "").strip() or hashlib.sha1(body.encode()).hexdigest()
+    key = str(pl.get("content_sha1") or "").strip() or hashlib.sha1(body.encode(), usedforsecurity=False).hexdigest()
     groups[key].append(p)
 
 victims = []

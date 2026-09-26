@@ -150,7 +150,7 @@ class QdrantSyncHandler(FileSystemEventHandler):
     @staticmethod
     def _md5(data):
         import hashlib
-        return hashlib.md5(data).hexdigest()
+        return hashlib.md5(data, usedforsecurity=False).hexdigest()
 
     def on_modified(self, event):
         if not event.is_directory and event.src_path.endswith('.md'):

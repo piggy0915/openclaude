@@ -5,7 +5,10 @@
 # 公共工具链（Node、Python 依赖、agent-browser、Chromium、技能链）全部来自
 # hermes-base:main —— 本文件只保留 hermes 专属内容。
 # ============================================================
-FROM hermes-base:main
+# 基座来源参数化（2026-09-25）：默认 slim（hermes-base:main）；
+# 要用 Bot Screen 桌面变体时传 --build-arg BASE_IMAGE=hermes-base-desktop:main
+ARG BASE_IMAGE=hermes-base:main
+FROM ${BASE_IMAGE}
 
 USER root
 

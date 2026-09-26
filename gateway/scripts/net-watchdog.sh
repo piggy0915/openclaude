@@ -35,6 +35,9 @@ PROBE_PORT="${PROBE_PORT:-443}"
 IFACE="${IFACE:-eth0}"
 APP_CONTAINER="${APP_CONTAINER:-hermes}"
 PEER_CONTAINER="${PEER_CONTAINER:-hermes-webui}"
+# 绑定 docker.sock 的旁路容器：dockerd 重启会让 socket 换 inode，容器内旧 bind 成「僵尸 socket」
+# （2026-09-21 实测：dockerd 17:20 重启后 Portainer 环境显示 Down，宿主 inode 195326 vs 容器内 1995）
+SOCK_CONTAINERS="${SOCK_CONTAINERS:-portainer}"
 DRY_RUN="${DRY_RUN:-0}"
 # -----------------------------------------
 
@@ -201,6 +204,8 @@ ladder(){
   if ok_now; then log "阶梯① dhcpcd -n $IFACE 后已恢复"; return 0; fi
   why=$(guards_block || true); if [ -n "$why" ]; then log "放弃阶梯②/③：$why"; return 1; fi
   act systemctl restart docker >/dev/null 2>&1
+  # dockerd 重启后 socket inode 变化 → 必须重启 bind 了 socket 的旁路容器，否则其环境状态永远 Down
+  for c in $SOCK_CONTAINERS; do act docker restart "$c" >/dev/null 2>&1 || true; done
   nap 20
   if ok_now; then log "阶梯② 重启 dockerd 后已恢复"; return 0; fi
   why=$(guards_block || true); if [ -n "$why" ]; then log "放弃阶梯③：$why"; return 1; fi

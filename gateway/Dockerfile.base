@@ -12,7 +12,13 @@
 #   Ekko Studio MCP    → /opt/ekko/bin/ekko-studio-mcp.mjs （自包含单文件）
 #   ⚠ 禁止执行 agent-browser install（会在 $HOME/.agent-browser 再下第三份 Chrome）
 # ============================================================
-FROM nousresearch/hermes-agent:main
+# 基座来源参数化（2026-09-25）：默认 slim —— 与改造前行为完全一致；
+# 桌面变体（预装 TigerVNC/Xfce + 有头 Chromium，供 Bot Screen 接管）用：
+#   docker build -f Dockerfile.base \
+#     --build-arg BASE_IMAGE=nousresearch/hermes-agent:main-desktop \
+#     -t hermes-base-desktop:main .
+ARG BASE_IMAGE=nousresearch/hermes-agent:main
+FROM ${BASE_IMAGE}
 
 ARG NODE_VERSION=24.21.0
 ARG PLAYWRIGHT_VERSION=1.62.0
@@ -63,6 +69,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgbm1 \
         libasound2 \
         dbus \
+        xvfb \
         libgtk-3-0 \
         socat \
         gh \
@@ -103,9 +110,27 @@ RUN /opt/hermes/.venv/bin/pip install \
         'firecrawl-py>=4.37.0'
 
 # 固化 lazy_deps 的两处版本 pin（消除启动期 lazy-refresh 竞态）
-RUN sed -i 's/edge-tts==7\.2\.7/edge-tts==7.2.8/g' /opt/hermes/tools/lazy_deps.py && \
-    sed -i 's/firecrawl-py==4\.17\.0/firecrawl-py>=4.17.0,<5/' /opt/hermes/tools/lazy_deps.py && \
-    grep -q 'edge-tts==7.2.8' /opt/hermes/tools/lazy_deps.py
+# 上游已把 lazy_deps.py 改为 shim（无任何 pin）→ 旧 pin 不存在时跳过，匹配到旧 pin 才改写并断言
+RUN if grep -q 'edge-tts==7\.2\.7' /opt/hermes/tools/lazy_deps.py; then \
+        sed -i 's/edge-tts==7\.2\.7/edge-tts==7.2.8/g' /opt/hermes/tools/lazy_deps.py && \
+        sed -i 's/firecrawl-py==4\.17\.0/firecrawl-py>=4.17.0,<5/' /opt/hermes/tools/lazy_deps.py && \
+        grep -q 'edge-tts==7.2.8' /opt/hermes/tools/lazy_deps.py; \
+    else \
+        echo '[skip] lazy_deps.py: old pins absent (upstream shim) - nothing to pin'; \
+    fi
+
+# 恢复 PATH 上的 uv：上游把 uv 改为 vendored 目录（/opt/hermes/tools/uv-<ver>-linux-<arch>/），
+# 不再随 PATH 提供；下面的 pip/uv 步骤与运行时工具都依赖 `uv` 命令名
+RUN UV_BIN="$(ls -1 /opt/hermes/tools/uv-*/uv 2>/dev/null | head -1)"; \
+    if command -v uv >/dev/null 2>&1; then \
+        echo "[ok] uv already on PATH: $(uv --version)"; \
+    elif [ -n "$UV_BIN" ]; then \
+        ln -sf "$UV_BIN" /usr/local/bin/uv && \
+        ln -sf "$(dirname "$UV_BIN")/uvx" /usr/local/bin/uvx && \
+        uv --version; \
+    else \
+        echo "[fail] uv not on PATH and not vendored under /opt/hermes/tools/uv-*/" >&2; exit 1; \
+    fi
 
 RUN uv pip install --python /opt/hermes/.venv/bin/python3 \
         --index-url ${PIP_INDEX} \
@@ -231,7 +256,7 @@ RUN export PATH="/usr/local/bin:$PATH" && \
 # ============================================
 ENV REASONIX_HOME=/opt/data/reasonix
 RUN export PATH="/usr/local/bin:$PATH" && \
-    npm install -g @alibaba-group/open-code-review@1.12.7 \
+    npm install -g @alibaba-group/open-code-review@1.12.9 \
         --registry=https://registry.npmjs.org && \
     ocr --version && \
     npm cache clean --force
