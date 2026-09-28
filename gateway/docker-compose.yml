@@ -7,7 +7,7 @@ services:
 
   # ---------- 支撑组件 ----------
   postgres:
-    image: postgres:15-alpine
+    image: postgres:18-alpine
     container_name: postgres
     restart: unless-stopped
     environment:
@@ -16,7 +16,7 @@ services:
       POSTGRES_USER: ${DIFY_DB_USERNAME:-postgres}
       TZ: Asia/Shanghai
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql
     ports:
       - "5432:5432"
     networks:
@@ -683,6 +683,11 @@ services:
       - API_SERVER_ENABLED=true
       - API_SERVER_PORT=8642
       - API_SERVER_HOST=0.0.0.0
+      # 2026-09-26：启用官方 Web Dashboard。**本栈镜像内 s6 服务不生效**（PID1=entrypoint.sh，
+      # 无 s6-svscan），实际由 scripts/entrypoint.sh 按此开关后台拉起；端口映射见上方 9119。
+      # 0.0.0.0 绑定会强制鉴权门（没有 provider 会 fail closed），凭据在
+      # data/hermes/config.yaml 的 dashboard.basic_auth（scrypt 哈希 + 固定 secret）。
+      - HERMES_DASHBOARD=1
       # 禁用可能冲突的功能
 #      - HERMES_LOG_LEVEL=debug
 #      - DISABLE_MESSAGING_PLATFORMS=true
@@ -762,7 +767,7 @@ services:
 
   hermes-webui:
     stop_grace_period: 30s
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.7.24}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.7.25}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
     # 2026-09-18：固定 DNS（同上）
     dns:

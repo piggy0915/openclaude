@@ -355,10 +355,13 @@ RUN npm install -g dev-browser@0.2.9 --registry=https://registry.npmjs.org && \
 # 7) Ekko Studio MCP（自包含单文件，两容器共用；不再依赖宿主 /app）
 # ============================================
 COPY app/bin/ekko-studio-mcp.mjs app/bin/hermes-studio-mcp.mjs app/bin/hermes-web-ui-mcp.mjs /opt/ekko/bin/
+COPY app/bin/browser/ /opt/ekko/bin/browser/
 COPY app/package.json /opt/ekko/package.json
 # CRLF 归一：源 app/bin/*.mjs 由 Ekko 构建生成，恒为 CRLF；直接执行报 env: 'node\r'
-RUN sed -i 's/\r$//' /opt/ekko/bin/*.mjs && \
+#   注意：ekko-studio-mcp.mjs 依赖 ./browser/jev.mjs（新增 import），browser/ 目录必须一并拷入并归一行结尾
+RUN sed -i 's/\r$//' /opt/ekko/bin/*.mjs /opt/ekko/bin/browser/*.mjs && \
     node --check /opt/ekko/bin/ekko-studio-mcp.mjs && \
+    node --check /opt/ekko/bin/browser/jev.mjs && \
     echo "Ekko MCP installed at /opt/ekko/bin"
 
 # ============================================

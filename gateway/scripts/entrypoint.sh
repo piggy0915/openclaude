@@ -118,6 +118,28 @@ if command -v socat >/dev/null 2>&1 && ! grep -qi ':17AC' /proc/net/tcp 2>/dev/n
 else
     echo "⚠ socat 转发跳过（socat 缺失或 6060 已监听）"
 fi
+
+# —— 官方 Web Dashboard（2026-09-26 启用）——
+# 镜像内 s6 服务 `dashboard`（docker/s6-rc.d/dashboard/run）在本栈**不生效**：
+# 容器入口是 entrypoint.sh（exec hermes gateway run），没有 s6-svscan —— 与上面 CDP Chrome 同一原因。
+# 因此这里按同一套开关手动后台拉起。开关/参数与镜像 s6 run 脚本保持一致
+# （HERMES_DASHBOARD 为真值且非 0/false；--host 0.0.0.0 --port 9119 --no-open），宿主端口映射 9119。
+# 鉴权：0.0.0.0 绑定会强制鉴权门，没有已注册 provider 会 fail closed；
+#       凭据在 config.yaml 的 dashboard.basic_auth（scrypt 哈希 + 固定 secret，无明文）。
+if [ -n "${HERMES_DASHBOARD:-}" ] && [ "${HERMES_DASHBOARD}" != "0" ] && [ "${HERMES_DASHBOARD}" != "false" ]; then
+    if curl -s -m 2 "http://127.0.0.1:${HERMES_DASHBOARD_PORT:-9119}/api/status" >/dev/null 2>&1; then
+        echo "✓ Web Dashboard 已在运行（端口 ${HERMES_DASHBOARD_PORT:-9119}）"
+    else
+        nohup /opt/hermes/.venv/bin/hermes dashboard \
+            --host "${HERMES_DASHBOARD_HOST:-0.0.0.0}" \
+            --port "${HERMES_DASHBOARD_PORT:-9119}" --no-open \
+            >/tmp/dashboard.log 2>&1 &
+        echo "✓ Web Dashboard started (PID $!) → http://${HERMES_DASHBOARD_HOST:-0.0.0.0}:${HERMES_DASHBOARD_PORT:-9119}（日志 /tmp/dashboard.log）"
+    fi
+else
+    echo "⚠ HERMES_DASHBOARD not set — Web Dashboard disabled"
+fi
+
 export PATH="/home/agent/.local/bin:$PATH"
 # ── 最终启动 ──
 # 2026-09-11：/app 已从 hermes 容器移除（改由镜像提供，Ekko MCP 固化在 /opt/ekko/bin），
