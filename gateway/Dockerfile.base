@@ -255,8 +255,10 @@ RUN export PATH="/usr/local/bin:$PATH" && \
 #   （DEEPSEEK_API_KEY，两个容器均已注入），见 coding-agents/bootstrap.sh。
 # ============================================
 ENV REASONIX_HOME=/opt/data/reasonix
+# 2026-09-30 对齐：镜像钉版跟随 npm latest（= webui 侧 coding-agent 卷内副本实际版本），
+# 并用 compose 的 OCR_NO_UPDATE=1 阻止 ocr 每 18 分钟自更新造成漂移。
 RUN export PATH="/usr/local/bin:$PATH" && \
-    npm install -g @alibaba-group/open-code-review@1.12.9 \
+    npm install -g @alibaba-group/open-code-review@1.12.11 \
         --registry=https://registry.npmjs.org && \
     ocr --version && \
     npm cache clean --force
