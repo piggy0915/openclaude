@@ -16,7 +16,7 @@ docker images --format '  {{.Repository}}:{{.Tag}}  {{.ID}}  {{.CreatedSince}}' 
 docker ps --format '  {{.Names}}  {{.Status}}' | grep hermes
 
 echo
-echo "=== 1) 镜像钉版（本轮应有：ocr 1.12.9 / crawl4ai≥0.9.3 / anyio≥4.14.2 / pip≥26.2.0 / dev-browser 0.2.9）==="
+echo "=== 1) 镜像钉版（本轮应有：ocr 1.12.11 / crawl4ai≥0.9.3 / anyio≥4.14.2 / pip≥26.2.0 / dev-browser 0.2.9）==="
 docker exec $CTR sh -c '
   printf "  ocr        : "; ocr --version 2>/dev/null | head -1
   /opt/hermes/.venv/bin/python - <<PY

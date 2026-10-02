@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # 统一构建：hermes-base → hermes-agent → hermes-web-ui
-# 用法： ./build.sh [base|hermes|webui|all|desktop]   默认 all
+# 用法： ./build.sh [base|hermes|webui|laya|all|desktop]   默认 all
 #   base         公共基座(slim)     hermes-base:main           ← 官方 :main
 #   hermes       大脑镜像(slim)     hermes-agent:main          ← hermes-base:main
 #   webui        WebUI 镜像         hermes-web-ui:0.7.24       ← hermes-base:main
@@ -12,6 +12,8 @@
 #                  hermes-agent:main-desktop← hermes-base:main-desktop
 #                  webui（见下）
 #   desktop      只出桌面链（desktop 基座 + desktop 大脑），用于快速重建
+#   laya         自托管判断引擎     laya:main                  ← ./laya（Jev 平替）
+#                = `docker compose build laya`（服务定义在 docker-compose.yml）
 #
 # 口径：镜像名跟着来源走 —— 基于官方 main 生成 = hermes-agent:main；
 #       基于官方 main-desktop 生成 = hermes-agent:main-desktop。
@@ -27,7 +29,7 @@ TAG_BASE=${TAG_BASE:-hermes-base:main}
 TAG_BASE_DESKTOP=${TAG_BASE_DESKTOP:-hermes-base:main-desktop}
 TAG_HERMES=${TAG_HERMES:-hermes-agent:main}
 TAG_HERMES_DESKTOP=${TAG_HERMES_DESKTOP:-hermes-agent:main-desktop}
-TAG_WEBUI=${WEBUI_IMAGE:-hermes-web-ui:0.7.26}
+TAG_WEBUI=${WEBUI_IMAGE:-hermes-web-ui:0.7.27}
 TARGET=${1:-all}
 
 build_base() {
@@ -54,12 +56,18 @@ build_webui() {
 #  docker build -f app/Dockerfile --build-arg BASE_IMAGE="$TAG_BASE" -t "$TAG_WEBUI" app
 }
 
+build_laya() {
+  echo "==> Laya 判断引擎镜像   laya:main             ← ./laya（权重烘入，见 docker-compose.yml 的 laya 服务）"
+  docker compose build laya
+}
+
 case "$TARGET" in
   base)    build_base ;;
   hermes)  build_hermes ;;
   webui)   build_webui ;;
+  laya)    build_laya ;;
   desktop) build_base_desktop; build_hermes_desktop ;;
   all)     build_base; build_base_desktop; build_hermes; build_hermes_desktop; build_webui ;;
-  *) echo "用法: $0 [base|hermes|webui|all|desktop]"; exit 2 ;;
+  *) echo "用法: $0 [base|hermes|webui|laya|all|desktop]"; exit 2 ;;
 esac
 echo "==> 完成"
