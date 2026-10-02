@@ -1082,7 +1082,8 @@ services:
       LAYA_PRELOAD: "1"
       LAYA_MODELS: ${LAYA_MODELSCOPE_MODEL:-typed-decisions}
       # 物理核数；官方警告超配到逻辑核会明显退化
-      LAYA_THREADS: ${LAYA_THREADS:-8}
+      # 与 deploy 的 cpus 上限对齐；官方警告超配会明显退化
+      LAYA_THREADS: ${LAYA_THREADS:-4}
       HF_HUB_OFFLINE: "1"
       LAYA_LOG_LEVEL: info
     networks:
@@ -1101,8 +1102,9 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 512M
+          # 2026-10-02：512M 曾致 cgroup OOM 杀进程→重启循环；模型常驻 ~2.7G，留余量
+          cpus: '4'
+          memory: 4G
 
 volumes:
   opt_data_volume:
