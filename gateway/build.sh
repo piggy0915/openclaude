@@ -29,7 +29,7 @@ TAG_BASE=${TAG_BASE:-hermes-base:main}
 TAG_BASE_DESKTOP=${TAG_BASE_DESKTOP:-hermes-base:main-desktop}
 TAG_HERMES=${TAG_HERMES:-hermes-agent:main}
 TAG_HERMES_DESKTOP=${TAG_HERMES_DESKTOP:-hermes-agent:main-desktop}
-TAG_WEBUI=${WEBUI_IMAGE:-hermes-web-ui:0.7.27}
+TAG_WEBUI=${WEBUI_IMAGE:-hermes-web-ui:0.7.29}
 TARGET=${1:-all}
 
 build_base() {
