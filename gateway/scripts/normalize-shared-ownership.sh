@@ -18,6 +18,7 @@ TARGETS=(
   "$BASE/data/hermes/hooks"
   "$BASE/data/hermes/mcp"
   "$BASE/data/hermes/bin"
+  "$BASE/data/hermes/installs"   # CLI 安装态（.install.lock 由 root 侧运行时创建，uid10000 跑 hermes CLI 会 Permission denied）
   "$BASE/data/hermes/cron"
   "$BASE/data/hermes/shared"
   "$BASE/data/hermes/wisdom"

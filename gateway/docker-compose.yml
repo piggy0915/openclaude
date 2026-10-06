@@ -517,7 +517,7 @@ services:
   # SearXNG - 自建元搜索引擎（免费无限次搜索）
   # ============================================================
   searxng:
-    image: searxng/searxng:2026.8.22-9fea41204
+    image: searxng/searxng:2026.10.4-d48c4b555   # 2026-10-05 升级（原 2026.8.22-9fea41204）
     container_name: searxng
     restart: unless-stopped
 #    depends_on:
@@ -770,7 +770,7 @@ services:
   hermes-webui:
     stop_grace_period: 30s
     init: true            # 2026-09-30：PID1 是 node 应用，同样需要 init 回收僵尸
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.7.29}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.7.30}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
     # 2026-09-18：固定 DNS（同上）
     dns:
@@ -782,6 +782,7 @@ services:
       - "${PORT:-6060}:${PORT:-6060}"
       - "${PREVIEW_FRONTEND_PORT:-8651}:8651"
       - "${XAI_OAUTH_PORT:-56121}:56121"
+      - "${STUDIO_P2P_UDP_PORT_RANGE:-50000-50127}:${STUDIO_P2P_UDP_PORT_RANGE:-50000-50127}/udp"
     env_file:
       - ./config/.env
     volumes:
@@ -841,6 +842,9 @@ services:
       - HERMES_LAN_ADVERTISE_URL=${HERMES_LAN_ADVERTISE_URL:-}
       - HERMES_APP_ENTITLEMENT_REQUIRED=${HERMES_APP_ENTITLEMENT_REQUIRED:-true}
       - HERMES_APP_ENTITLEMENT_PUBLIC_KEY=${HERMES_APP_ENTITLEMENT_PUBLIC_KEY:-}
+      - STUDIO_P2P_UDP_PORT_RANGE=${STUDIO_P2P_UDP_PORT_RANGE:-50000-50127}
+      - STUDIO_P2P_INTERFACE=${STUDIO_P2P_INTERFACE:-}
+      - STUDIO_P2P_ADVERTISE_ADDRESSES=${STUDIO_P2P_ADVERTISE_ADDRESSES:-}
       - NPM_CONFIG_PREFIX=/home/agent/.hermes-web-ui/coding-agent/npm
       # 2026-10-01 重补（Sep30 那次随 compose 更新丢失）：Coding Agent 配置/授权根默认=$HOME（容器层，重建即丢）
       # → 指到卷内，使 Agent 管理器安装的 agent 连配置一起永久（二进制本就在卷内 npm prefix）。
@@ -1105,6 +1109,71 @@ services:
           # 2026-10-02：512M 曾致 cgroup OOM 杀进程→重启循环；模型常驻 ~2.7G，留余量
           cpus: '4'
           memory: 4G
+
+  # ---------------------------------------------------------------- FreeLLMAPI
+  # 34 家免费 LLM 提供方聚合成一个 OpenAI 兼容端点（智能路由 + 自动 failover + 密钥加密）
+  # 2026-10-04 整合进主栈：原为手工 docker run，现由 compose 托管并挂 rag-network
+  # ⚠️ 宿主端口不能用 3001（已被 nginx-obsidian 占用）→ 默认 3030
+  # ⚠️ 上游定位「个人实验用」，无 SLA；勿设为默认模型、勿放关键路径
+  freellmapi:
+    image: ghcr.io/tashfeenahmed/freellmapi:main
+    container_name: freellmapi
+    restart: unless-stopped
+    init: true
+    # 加密密钥等在这个文件里（install.sh 生成，含 ENCRYPTION_KEY）
+    env_file:
+      - ./freellmapi/.env
+    environment:
+      NODE_ENV: production
+      # 容器内端口固定 3001，与镜像一致
+      PORT: "3001"
+      # ★ 出站代理：实测本机直连 api.groq.com 被 Cloudflare 按地区回 403（cf-ray …-HKG），
+      #   必须经宿主上的 v2ray；否则所有提供方调用都会失败。
+      #   优先级：PROXY_URL > 仪表盘(Keys→Outbound proxy) > ALL_PROXY > HTTPS_PROXY > HTTP_PROXY > 系统检测 > 直连
+      #   注意：该 bypass 只看「目标主机」——目标是公网时走代理，目标是 localhost/内网时自动直连（不影响你挂 ollama）
+      PROXY_URL: ${FREELLMAPI_PROXY_URL:-http://192.168.137.1:10811}
+      # ★★ NO_PROXY 必须配 ★★（2026-10-06 实测踩坑）：
+      #   实测把 PROXY_URL 指向黑洞后，**连直连可达的 longcat/volcengine/zhipu 也全部 0.0s 秒挂**
+      #   → 证明 PROXY_URL 是「全局出站代理」，会套到所有 provider，**不是**只给需要翻墙的用。
+      #   即：v2ray 一关（Win11 关机/休眠），整个 freellmapi 全盘不可用，光重排 fallback 链救不了。
+      #   判定逻辑在 lib/proxy.js:465 `shouldBypassProxy()` = 平台白名单(_bypassPlatforms)
+      #     ∪ NO_PROXY(主机名/后缀匹配) ∪ 本机/内网目标；三者任一命中即直连。
+      #   下列三家本机直连可达、不需要翻墙，故用 NO_PROXY 让它们绕开代理：
+      #     longcat → api.longcat.chat ｜ volcengine → ark.cn-beijing.volces.com ｜ zhipu → open.bigmodel.cn / api.z.ai
+      #   NO_PROXY 规则「裸域名连带子域名」（同 curl/git），故写域名后缀即可。
+      NO_PROXY: ${FREELLMAPI_NO_PROXY:-longcat.chat,volces.com,bigmodel.cn,z.ai}
+      # 声明式启动配置：每次启动在 migrations 之后幂等应用（用于 headless 注入提供方密钥）
+      # 语义（server/src/services/declarative-config.ts: upsertApiKey）：按 (platform,label) upsert，
+      # 【不会删除】未列出的键 → 新 label = 追加一把新键；同 label = 覆盖那把
+      # ⚠️ 该 JSON 含明文密钥，权限要按 ENCRYPTION_KEY 对待（已 chmod 600）
+      FREEAPI_CONFIG_PATH: ${FREELLMAPI_CONFIG_PATH:-/app/server/data/freellmapi.config.json}
+    volumes:
+      # 数据（freeapi.db / 账户 / 提供方密钥）落在 data/ 下，与其余服务一致，便于备份
+      - ./data/freellmapi:/app/server/data
+    networks:
+      - rag-network
+    ports:
+      # 外部机器（Win11 浏览器）访问仪表盘用 0.0.0.0；只想本机访问改 FREELLMAPI_BIND_ADDRESS=127.0.0.1
+      - "${FREELLMAPI_BIND_ADDRESS:-0.0.0.0}:${FREELLMAPI_HOST_PORT:-3030}:3001"
+    healthcheck:
+      # 镜像自带 node，探免鉴权的 /api/ping
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/ping').then((res) => { if (!res.ok) process.exit(1); }).catch(() => process.exit(1));"
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          # 空载约 40MB；路由/压缩是 CPU 型但很轻
+          cpus: '2'
+          memory: 1G
 
 volumes:
   opt_data_volume:

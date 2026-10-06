@@ -46,6 +46,12 @@ EMBEDDING_MODEL = os.environ.get('EMBEDDING_MODEL', 'bge-large-zh-v1.5')
 CHUNK_SIZE = int(os.environ.get('CHUNK_SIZE', '350'))   # bge 512 token ~380 中文字，取 350 安全
 WATCHDOG_ENABLED = os.environ.get('WATCHDOG_ENABLED', '1') == '1'
 EXCLUDE_PATTERNS = ('.obsidian', 'awesome-design-md', '/temp/', '/archive/')
+# md5 去重缓存落盘（2026-10-06）：原先 self.processed 只在内存，容器一重启就丢，
+# 于是每次重启都全量重嵌整个 vault（275 个文件、含两个超大课程转录）。落盘后只同步变过的文件。
+# 位置只能是 vault 内的隐藏文件——该容器只挂了 /sync.py 与 vault 两个路径，没有别的可写持久路径。
+# 它是 .json 非 .md，既不会被自身索引，也不会触发 watchdog（事件回调只收 .md）。
+SYNC_CACHE_PATH = os.environ.get('SYNC_CACHE_PATH', '/knowledge_base/obsidian/.sync-cache.json')
+CACHE_SAVE_EVERY = 25          # 扫描期每 25 个文件落一次盘，避免频繁 IO
 
 
 def domain_for(rel: str) -> str:
@@ -71,7 +77,31 @@ def should_skip(rel: str) -> bool:
 
 class QdrantSyncHandler(FileSystemEventHandler):
     def __init__(self):
-        self.processed = {}
+        self.processed = self._load_cache()
+        self._dirty = 0
+
+    @staticmethod
+    def _load_cache():
+        """读回上次的 md5 缓存；任何异常都退回空缓存（等价旧行为，不会更糟）。"""
+        try:
+            with open(SYNC_CACHE_PATH, encoding='utf-8') as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _save_cache(self, force=False):
+        self._dirty += 1
+        if not force and self._dirty < CACHE_SAVE_EVERY:
+            return
+        self._dirty = 0
+        try:
+            tmp = SYNC_CACHE_PATH + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(self.processed, f)
+            os.replace(tmp, SYNC_CACHE_PATH)
+        except Exception as e:
+            logger.warning(f"cache save failed: {e}")
 
     def get_embedding(self, text):
         payload = json.dumps({"model": EMBEDDING_MODEL, "input": text}).encode()
@@ -107,6 +137,7 @@ class QdrantSyncHandler(FileSystemEventHandler):
         if filepath in self.processed and self.processed[filepath] == cur_hash:
             return
         self.processed[filepath] = cur_hash
+        self._save_cache()
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
         if not content.strip():
@@ -226,31 +257,42 @@ def main():
 
     ensure_collection()
 
-    logger.info("Initial sync...")
     handler = QdrantSyncHandler()
+
+    # 修复(2026-10-06)：watcher 必须在初始全量扫描**之前**启动。
+    # 原顺序是「扫描跑完 → observer.start()」，而扫描是同步阻塞的（大转录可达数十分钟），
+    # 于是**扫描期间新建/修改的文件既没人监听、扫描的遍历顺序又已经过了它所在目录 → 永久漏收**。
+    # 实测当天中过 3 次（其中一次漏 9 页）。与扫描并行是安全的：
+    # 同一文件可能被两边各同步一次，但 point_id = uuid5(rel#idx) 幂等。
+    observer = None
+    if WATCHDOG_ENABLED:
+        observer = Observer()
+        observer.schedule(handler, VAULT_PATH, recursive=True)
+        observer.start()
+        logger.info("Watching for changes... (started BEFORE initial scan)")
+
+    logger.info("Initial sync...")
     count = 0
     for f in sorted(Path(VAULT_PATH).rglob("*.md")):
         rel = str(f.relative_to(VAULT_PATH))
         if not should_skip(rel):
             handler.sync_file(str(f))
             count += 1
+    handler._save_cache(force=True)
     logger.info(f"Initial sync done ({count} files)")
 
     if not WATCHDOG_ENABLED:
         logger.info("WATCHDOG_ENABLED=0: one-shot sync complete, exiting")
         return
 
-    observer = Observer()
-    observer.schedule(handler, VAULT_PATH, recursive=True)
-    observer.start()
-    logger.info("Watching for changes...")
-
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        observer.stop()
-    observer.join()
+        if observer:
+            observer.stop()
+    if observer:
+        observer.join()
 
 
 if __name__ == '__main__':

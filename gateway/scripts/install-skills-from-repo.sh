@@ -203,7 +203,11 @@ while read -r n; do
   src=$(src_of "$n")
   if [ -z "$src" ]; then printf '  ❌ 仓库里找不到: %s\n' "$n"; ERR=$((ERR+1)); continue; fi
   dst=$(target_of "$src" "$n")
-  if [ -e "$dst" ]; then printf '  ⏭  已存在，跳过: %s\n' "$n"; SKIP=$((SKIP+1)); continue; fi
+  # 2026-10-05 修：原判据只看目标路径（顶层），技能若已被整理进分类目录会判为“不存在”→ 重复回写。
+  #   改为“全树同名即视为已装”，杜绝重复副本。
+  if [ -e "$dst" ] || find "$LIVE" -mindepth 2 -maxdepth 3 -type d -name "$n" -print -quit 2>/dev/null | grep -q .; then
+    printf '  ⏭  已存在（含分类目录同名），跳过: %s\n' "$n"; SKIP=$((SKIP+1)); continue
+  fi
   printf '  ➕ %-52s → %s\n' "$n" "${dst#$LIVE/}"
   if [ "$MODE" = apply ]; then
     mkdir -p "$(dirname "$dst")"
