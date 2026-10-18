@@ -47,15 +47,19 @@ if [ -z "$hits" ]; then echo "  （无命中）"; else
 fi
 
 echo
-echo "=== ③ Dify 知识库检索 ==="
-# 2026-09-15 两处修复：
-#   ① 原实现打 http://127.0.0.1:8090 —— 宿主上该端口不通 → curl 空响应 → 只打印"（响应解析失败）"，
-#      等于这层白查（check-kb-stack 只查凭据，抓不到）→ 改为在脑侧容器内请求 dify-limiter:8090。
-#   ② 实测 reranking_enable=true 时 Dify 返回 **0 条**（同查询 semantic/hybrid 无 rerank 均 5 条）→
-#      保留用户的 hybrid 0.7/0.3 配置，但 rerank 拿不到结果时**自动回退**到无 rerank 并注明。
-docker exec -i -e Q="$Q" -e K="$K" -e TK="$TK" hermes python3 - <<'PY' 2>&1
+echo "=== ③ Dify 知识库检索（KB_RERANK=${KB_RERANK:-1} 本地精排·默认 | KB_RERANK_POOL=${KB_RERANK_POOL:-5} 候选池 | KB_RERANK=0 秒回）==="
+# 2026-09-15 修复：宿主 127.0.0.1:8090 不通 → 改在脑侧容器内请求 dify-limiter:8090。
+# 2026-10-14 续修（根因排查）：
+#   本地 reranker（reranker-llama / bge-reranker-v2-m3 Q8_0 / CPU）单篇约 2~3s；
+#   Dify 一次检索送 ~15 篇候选 → 2 核时 >55s，超过 dify-limiter 的 proxy_read_timeout（原 30s）→ 每次都 504，
+#   等于"③ 层整层白查"。已做三件事：① limiter proxy_read_timeout 30s→120s（data/dify/nginx/nginx.conf）；
+#   ② reranker-llama CPU 2→6 核（实测 10 篇 22s→11.6s）；③ 本脚本：rerank 改为**可选**（KB_RERANK=1），
+#   默认走无 rerank 的 hybrid_search（0.2s 返回、相关性排序实测可用），rerank 失败/超时也会自动降级并注明。
+docker exec -i -e Q="$Q" -e K="$K" -e TK="$TK" -e RERANK="${KB_RERANK:-1}" -e POOL="${KB_RERANK_POOL:-5}" -e TO="${KB_TIMEOUT:-90}" hermes python3 - <<'PYEOF' 2>&1
 import json, os, pathlib, urllib.request, urllib.error
 Q = os.environ["Q"]; K = int(os.environ.get("K", 5)); TK = int(os.environ.get("TK", 10))
+RERANK = os.environ.get("RERANK", "1") == "1"; TO = int(os.environ.get("TO", "90"))
+POOL = int(os.environ.get("POOL", "8"))   # 精排候选池：Dify 实际送 2×top_k 篇给 reranker
 env = {}
 p = pathlib.Path("/home/agent/.hermes/.env")
 if p.exists():
@@ -66,54 +70,58 @@ key = env.get("DIFY_DATASET_KEY", "")
 ids = [x for x in (env.get("DIFY_DATASET_IDS") or env.get("DIFY_DATASET_ID") or "").replace(" ", "").split(",") if x]
 if not key or not ids:
     print("  ⏭  未配置（缺 DIFY_DATASET_KEY / DIFY_DATASET_IDS）→ 见技能 kb-first-lookup"); raise SystemExit(0)
-MODEL = {"search_method": "hybrid_search",
+
+def build(rerank, tk):
+    m = {"search_method": "hybrid_search",
          "weights": {"keyword_setting": {"keyword_weight": 0.3},
                      "vector_setting": {"vector_weight": 0.7, "embedding_provider_name": "", "embedding_model_name": ""}},
-         "reranking_enable": True, "reranking_mode": "reranking_model",
-         "reranking_model": {"reranking_provider_name": "langgenius/openai_api_compatible/openai_api_compatible",
-                             "reranking_model_name": "bge-reranker-v2-m3"},
-         # 注意：本机 reranker（llama.cpp 的 /v1/rerank）返回的是**原始 logits**（无关文档为负分），
-         # 而 Dify 只保留 score > 0 → 无相关内容时会返回 0 条。故显式把阈值压到负数 = 不丢弃、
-         # 仅借用 rerank 的相关性排序。（根治方案见技能：给 reranker 前置 sigmoid 归一化代理）
-         "score_threshold_enabled": True, "score_threshold": -100, "top_k": TK}
+         "top_k": tk}
+    if rerank:
+        m.update({"reranking_enable": True, "reranking_mode": "reranking_model",
+                  "reranking_model": {"reranking_provider_name": "langgenius/openai_api_compatible/openai_api_compatible",
+                                      "reranking_model_name": "bge-reranker-v2-m3"},
+                  # 本机 reranker 返回原始 logits（无关文档为负分），阈值压到负数 = 不丢弃、只借排序
+                  "score_threshold_enabled": True, "score_threshold": -100})
+    else:
+        m.update({"reranking_enable": False, "score_threshold_enabled": False})
+    return m
 
 def retrieve(ds, model):
     req = urllib.request.Request("http://dify-limiter:8090/v1/datasets/%s/retrieve" % ds, method="POST",
         data=json.dumps({"query": Q, "retrieval_model": model}).encode(),
         headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=TO) as r:
             d = json.load(r)
     except urllib.error.HTTPError as e:
         raw = e.read().decode(errors="replace")
         try: msg = json.loads(raw).get("message", raw[:120])
         except Exception: msg = raw[:120]
-        return None, "HTTP %s: %s" % (e.code, msg)
+        return None, "HTTP %s: %s" % (e.code, str(msg)[:120])
     except Exception as e:
         return None, "%s: %s" % (type(e).__name__, str(e)[:100])
-    return d.get("records") or (d.get("data") or {}).get("records") or [], None
+    # Dify 在插件/模型调用出错时仍回 200，但 records 为空
+    return (d.get("records") or (d.get("data") or {}).get("records") or []), None
 
 for ds in ids:
     print("  —— dataset %s… ——" % ds[:8])
-    recs, err = retrieve(ds, MODEL)
+    used_rerank = RERANK
+    recs, err = retrieve(ds, build(RERANK, POOL if RERANK else TK))
+    if RERANK and (err or not recs):                      # rerank 失败 → 自动降级
+        print("      （注：rerank 失败/超时或返回空 → 已自动降级为无 rerank 检索）")
+        used_rerank = False
+        recs, err = retrieve(ds, build(False, TK))   # 降级：无精排、放宽候选池
     if err:
         print("      ❌ %s" % err); continue
-    if not recs:                                  # rerank 不生效时的自动回退
-        recs2, err2 = retrieve(ds, dict(MODEL, reranking_enable=False))
-        if recs2:
-            print("      （注：rerank 开启时返回 0 条 → 已自动回退到无 rerank）")
-            recs = recs2
-        elif err2:
-            print("      ❌ %s" % err2); continue
     if not recs:
         print("      （无命中）"); continue
-    if recs and all((r.get("score") or 0) == 0 for r in recs):
+    if used_rerank and all((r.get("score") or 0) == 0 for r in recs):  # 分数被归零时给提示
         print("      （分数字段被 Dify 归零：reranker 原始 logits 为负；下方顺序仍是 rerank 相关性序）")
     for r in recs[:K]:
         seg = r.get("segment") or {}; doc = seg.get("document") or {}
         print("      [%.3f] 《%s》" % (r.get("score", 0), str(doc.get("name", "?"))[:44]))
         print("          " + (seg.get("content") or "").replace("\n", " ")[:130])
-PY
+PYEOF
 
 echo "=== ④ 部署文档检索（docs/ 与 Gitee 仓库文档）==="
 found=0

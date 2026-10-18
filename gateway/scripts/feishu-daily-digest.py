@@ -7,8 +7,10 @@
   python3 scripts/feishu-daily-digest.py --date 2026-10-06   # 指定统计日（默认今天）
 
 依赖：scripts/feishu-push.py（同目录）；QDRANT_API_KEY（取不到则跳过该段）
+      AIHOT 精选 RSS（https://aihot.news/feed.xml；可用 env AIHOT_FEED 换源，抓取失败则整段跳过）
 """
-import argparse, datetime as dt, json, pathlib, re, subprocess, sys, urllib.request
+import argparse, datetime as dt, json, os, pathlib, re, subprocess, sys, urllib.request
+import xml.etree.ElementTree as ET
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 VAULT = ROOT / 'data/obsidian/knowledge'
@@ -72,6 +74,31 @@ def qdrant_counts(e: dict):
     return out
 
 
+# ── AI 热点：AIHOT 精选 RSS（https://aihot.news/feed.xml）────────────────────────
+AIHOT_FEED_DEFAULT = 'https://aihot.news/feed.xml'   # 站点改过域名，可用 env AIHOT_FEED 覆盖
+AIHOT_TOP = 5
+
+def aihot_top(e: dict, n: int = AIHOT_TOP):
+    """取 AIHOT 精选前 n 条 → [(标题, 链接, 分类)]；任何失败返回 []（日报其余部分不受影响）。"""
+    feed = (e or {}).get('AIHOT_FEED') or AIHOT_FEED_DEFAULT
+    try:
+        req = urllib.request.Request(feed, headers={'User-Agent': 'hermes-feishu-digest/1.0'})
+        xml = urllib.request.urlopen(req, timeout=15).read()
+        ch = ET.fromstring(xml).find('channel')
+        out = []
+        for it in (ch.findall('item') if ch is not None else []):
+            title = (it.findtext('title') or '').strip()
+            if not title or 'AIHOT 通知' in title:      # 站方通告不是资讯
+                continue
+            cat = next((c.text for c in it.findall('category') if c.text), '')
+            out.append((title, (it.findtext('link') or '').strip(), cat))
+            if len(out) >= n:
+                break
+        return out
+    except Exception:
+        return []
+
+
 def build(day: dt.date) -> str:
     e = env()
     raw, wiki = today_files(day)
@@ -88,8 +115,32 @@ def build(day: dt.date) -> str:
     if q:
         seg = ' · '.join(f'{k} {v}' for k, v in q.items() if v is not None) or '（取数失败）'
         lines.append(f'**检索库**：{seg}')
+    hot = aihot_top(e)
+    if hot:
+        lines += ['', '**AI 热点**（AIHOT 精选）']
+        for title, link, cat in hot:
+            seg = f'`{cat}` ' if cat else ''
+            lines.append(f'· {seg}[{title[:80]}]({link})' if link else f'· {seg}{title[:80]}')
+        lines.append('· [更多 AIHOT 精选 →](https://aihot.news/)')
     lines += ['', '_由 `scripts/feishu-daily-digest.py` 自动生成_']
     return '\n'.join(lines)
+
+
+ARCHIVE_DIR = ROOT / 'data/hermes/digest-archive'
+
+
+def archive(day: dt.date, body: str) -> None:
+    """卡片正文落盘归档（原先只留 message_id，事后无法回看推送内容）。
+    失败只告警不抛出 —— 归档失败绝不影响推送本身。"""
+    try:
+        ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+        (ARCHIVE_DIR / f'{day.isoformat()}.md').write_text(
+            f'# 知识库日报 · {day.isoformat()}\n\n'
+            f'> 归档自 scripts/feishu-daily-digest.py'
+            f'（{dt.datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")}）\n\n{body}\n',
+            encoding='utf-8')
+    except Exception as exc:
+        print(f'[warn] 日报归档失败（不影响推送）：{exc}', file=sys.stderr)
 
 
 def main() -> int:
@@ -101,6 +152,7 @@ def main() -> int:
     body = build(day)
     if a.dry_run:
         print(body); return 0
+    archive(day, body)
     cmd = [sys.executable, str(ROOT/'scripts/feishu-push.py'), '--title', f'知识库日报 · {day.isoformat()}', '--text', body]
     return subprocess.run(cmd).returncode
 
