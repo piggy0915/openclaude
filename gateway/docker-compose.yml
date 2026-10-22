@@ -131,7 +131,7 @@ services:
           memory: 256M
 
   dify-api:
-    image: langgenius/dify-api:1.16.1  # 使用具体版本号
+    image: langgenius/dify-api:1.17.1  # 使用具体版本号
     container_name: dify-api
     restart: unless-stopped
     env_file:
@@ -174,6 +174,8 @@ services:
       PLUGIN_DAEMON_URL: ${PLUGIN_DAEMON_URL:-http://dify-plugin_daemon:5002}
       PLUGIN_DAEMON_KEY: ${PLUGIN_DAEMON_KEY}
       MODE: api
+      # 入口脚本据此决定启动前是否跑 flask upgrade-db（不设则该判断为假 ⇒ 升级后新表永远缺）
+      MIGRATION_ENABLED: "true"
       LOG_LEVEL: INFO
       TZ: Asia/Shanghai
       LC_ALL: en_US.UTF-8
@@ -197,7 +199,7 @@ services:
           memory: 2G
 
   dify-worker:
-    image: langgenius/dify-api:1.16.1
+    image: langgenius/dify-api:1.17.1
     container_name: dify-worker
     restart: unless-stopped
     command: /bin/bash /entrypoint.sh worker
@@ -246,7 +248,7 @@ services:
           memory: 2G
 
   dify-web:
-    image: langgenius/dify-web:1.16.1
+    image: langgenius/dify-web:1.17.1
     container_name: dify-web
     restart: unless-stopped
     environment:
@@ -266,7 +268,7 @@ services:
 
 
   dify-worker_beat:
-    image: langgenius/dify-api:1.16.1
+    image: langgenius/dify-api:1.17.1
     container_name: dify-worker_beat
     restart: unless-stopped
     command: /bin/bash /entrypoint.sh beat
@@ -297,8 +299,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.3'
-          memory: 512M
+          cpus: '0.5'
+          memory: 1G
 
   dify-plugin_daemon:
     image: langgenius/dify-plugin-daemon:0.6.10-local
@@ -443,7 +445,7 @@ services:
           memory: 1G
 
   obsidian:
-    image: ghcr.io/linuxserver/obsidian:1.13.7
+    image: ghcr.io/linuxserver/obsidian:1.14.4
     container_name: obsidian
     security_opt:
       - no-new-privileges:false
@@ -533,7 +535,7 @@ services:
   # SearXNG - 自建元搜索引擎（免费无限次搜索）
   # ============================================================
   searxng:
-    image: searxng/searxng:2026.10.4-d48c4b555   # 2026-10-05 升级（原 2026.8.22-9fea41204）
+    image: searxng/searxng:2026.10.19-81371861f   # 2026-10-05 升级（原 2026.8.22-9fea41204）
     container_name: searxng
     restart: unless-stopped
 #    depends_on:
@@ -577,7 +579,7 @@ services:
   # Qdrant - 高性能向量数据库（替代 ChromaDB）
   # ============================================================
   qdrant:
-    image: qdrant/qdrant:v1.19
+    image: qdrant/qdrant:v1.19.2
     container_name: qdrant
     restart: unless-stopped
     ports:
@@ -1059,14 +1061,26 @@ services:
   # ========== Prompt Optimizer（2026-09-19）：A 路线 = Web GUI + HTTP MCP ==========
   # 用途：浏览器里人工优化提示词；HTTP MCP 端点 http://prompt-optimizer:8081/mcp
   # 资源上锁：0.5 核 / 512M（沿用 dify 服务的 deploy.resources.limits 写法）
+  # 2026-10-21 A1 合并：Web UI 与内置 MCP 合一，只保留本容器。
+  # 变更三处：
+  #  ① ports: 8081:8081 -> 8081:80  —— 容器内 nginx 监听 80（NGINX_PORT=80），
+  #     原映射指向容器内无人监听的 8081 → 宿主访问 Connection reset（实测：容器内 80 → 200，容器内 8081 → 无监听）。
+  #  ② image: linshen/prompt-optimizer:2.11.12（与运行中镜像对齐，避免重建触发远端拉取；上游 aliyun tag 需鉴权）。
+  #  ③ 挂载 supervisor 覆盖：内置 mcp-server 原 autorestart=false，
+  #     2026-10-20 22:39 收到 SIGTERM 优雅退出后永不重启（实测 EXITED，/mcp 返 404）→ 改为 autorestart=true。
   prompt-optimizer:
-    image: linshen/prompt-optimizer:latest
+    image: linshen/prompt-optimizer:2.11.12
     container_name: prompt-optimizer
     restart: unless-stopped
     ports:
-      - "8081:8081"
+      - "8081:80"
     env_file:
       - ./config/prompt-optimizer.env
+    environment:
+      - NGINX_PORT=80
+      - MCP_HTTP_PORT=3000
+    volumes:
+      - ./config/prompt-optimizer-supervisor.conf:/etc/supervisor/conf.d/supervisord.conf:ro
     deploy:
       resources:
         limits:
@@ -1074,7 +1088,6 @@ services:
           memory: 512M
     networks:
       - rag-network
-
 
 
   # ============================================================

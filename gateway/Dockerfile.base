@@ -20,7 +20,7 @@
 ARG BASE_IMAGE=nousresearch/hermes-agent:main
 FROM ${BASE_IMAGE}
 
-ARG NODE_VERSION=24.21.0
+ARG NODE_VERSION=24.22.1
 ARG PLAYWRIGHT_VERSION=1.62.0
 ARG PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PIP_EXTRA_INDEX=https://pypi.org/simple
