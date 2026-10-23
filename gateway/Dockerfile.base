@@ -99,15 +99,101 @@ RUN ARCH=$(dpkg --print-architecture) \
     && npm config set registry ${NPM_REGISTRY} \
     && node --version && npm --version
 
+# ============================================================
+# Dockerfile.base —— 第 4 节替换补丁（解决 pillow ResolutionImpossible）
+# 用法：把 Dockerfile.base 中
+#         "# ==== 4) Python 环境与依赖" 到
+#         那条 `pip install -e /opt/hermes 'firecrawl-py>=4.37.0'`
+#       之间的内容整体替换为下面这段（RUN python3 -m venv 保留在这里）
+# ============================================================
+
+# ============================================================
+# Dockerfile.base —— 第 4 节替换补丁（解决 pillow ResolutionImpossible）
+# 用法：把 Dockerfile.base 中
+#         "# ==== 4) Python 环境与依赖" 到
+#         那条 `pip install -e /opt/hermes 'firecrawl-py>=4.37.0'`
+#       之间的内容整体替换为下面这段（RUN python3 -m venv 保留在这里）
+# ============================================================
+
 # ============================================
 # 4) Python 环境与依赖
 RUN python3 -m venv /opt/hermes/.venv
+
+# ------------------------------------------------------------
+# 4.0) 探针（正常构建时纯打印，不产层副作用；只有排错时才要看它）
+#   pillow 的 wheel 严格按 cp3XX ABI 分发，只要 venv 解释器版本/ABI 超出
+#   pillow 已发布的 tag 范围，pip 就会追加那句：
+#     Additionally, some packages ... have no matching distributions available: pillow
+#   故先把「venv 实际 python」+「该解释器当前可安装的 pillow 版本」打出来。
+#   判读：
+#     · pip index 输出里必须含 12.3.0（否则是本⇢index 源滞后/不可达，与本冲突无关）；
+#     · 若连上一次都用 BUILDARG 换 interpreter（BASE_IMAGE / uv python），
+#       注意本机 github.com HTTPS 被阻断，uv python 下载走 python-build-standalone 会失败。
+# ------------------------------------------------------------
+RUN /opt/hermes/.venv/bin/python3 -VV \
+ && /opt/hermes/.venv/bin/python3 -c "import sysconfig;print('platform:',sysconfig.get_platform())" \
+ && (/opt/hermes/.venv/bin/pip index versions pillow \
+        --index-url ${PIP_INDEX} \
+        --extra-index-url ${PIP_EXTRA_INDEX} \
+     || echo "[warn] pip index pillow failed - check index reachability")
+
+# ------------------------------------------------------------
+# 4.1) 消解 pillow 死锁（2026-10-24）
+#
+# 冲突事实（PyPI 元数据已核实，非推测）：
+#   browser-harness 0.1.13（latest）及其 0.1.9~0.1.12 全部无条件硬钉 pillow==12.3.0；
+#   0.1.6~0.1.8 硬钉 pillow==12.2.0 —— 升/降 browser-harness 都躲不开硬钉写法。
+#   hermes-agent 侧按 python_version 分段硬钉：
+#       pillow==12.3.0 ; python_version <  "3.14"
+#       Pillow==13.0.0 ; python_version >= "3.14"   ← 当前 base python ≥3.14，这条被激活
+#   → 一个 venv 只能装一个 pillow，两组 == 无交集，pip 必然 ResolutionImpossible。
+#
+# 结论：pillow 只能落在 12.3.0（browser-harness 不让），因此把 hermes 这侧的硬钉
+#       放宽成下界 >=12.3.0，与 browser-harness 的 ==12.3.0 取交集即可收敛。
+#       只改版本号、保留原 marker，两个分支各自变成安全下界，不会引入重复依赖。
+#
+# ⚠ 踩过的坑（2026-10-24 实测）：sed 的版本号字符类必须把 `;` 一起排除。
+#   写成 `[^",[:space:]]` 会把 `13.0.0;` 的分号吞掉，得到
+#     "pillow>=12.3.0 python_version >= '3.14'"     ← 少了 `;`，不是合法 PEP 508
+#   setuptools（validate-pyproject 校验层）直接抛：
+#     configuration error: project.dependencies[41] must be pep508
+#   正确写法见下：`[^",;[:space:]]`。
+
+# 为什么在镜像里改源码，而不是把基础镜像降到 python 3.13：
+#   降到 3.13 确实也能解（走 <3.14 分支），但那依赖"上游 <3.14 分支恰好也是 12.3.0"，
+#   属于猜；且会整条栈偏离基座自带解释器。改一行正则对任意 python 版本都成立，
+#   且本文件后面三条 `uv pip install -e /opt/hermes` 会一并受益（它们读同一个 pyproject）。
+#
+# 上游若日后自行放宽（不再出现 pillow==），本步打印 [skip] 并自动跳过。
+# ------------------------------------------------------------
+RUN if grep -qiE 'pillow[[:space:]]*==' /opt/hermes/pyproject.toml; then \
+        cp -a /opt/hermes/pyproject.toml /opt/hermes/pyproject.toml.orig && \
+        sed -i -E 's/pillow[[:space:]]*==[0-9][^",;[:space:]]*/pillow>=12.3.0/gI' /opt/hermes/pyproject.toml; \
+        echo "[patch] hermes pillow pin -> >=12.3.0"; \
+    else \
+        echo "[skip] pyproject.toml 无 pillow 硬钉，上游可能已放宽"; \
+    fi \
+ && echo "[check] 改后 pillow 条目：" \
+ && grep -inE 'pillow' /opt/hermes/pyproject.toml \
+ && (! grep -qiE 'pillow[^;]*python_version' /opt/hermes/pyproject.toml \
+     || { echo "[fail] pillow 条目里 marker 前的 ';' 丢了（sed 又吃分号了）" >&2; exit 1; }) \
+ && /opt/hermes/.venv/bin/python3 -c "import tomllib,pathlib; d=tomllib.loads(pathlib.Path('/opt/hermes/pyproject.toml').read_text()); print('[check] pyproject 可解析，pillow 条目：', [x for x in d['project']['dependencies'] if 'pillow' in x.lower()])"
+
+# pillow 显式写在命令行：既是自文档，也防止 resolver 在 >= 区间里漂到别的版本
 RUN /opt/hermes/.venv/bin/pip install \
         --index-url ${PIP_INDEX} \
         --extra-index-url ${PIP_EXTRA_INDEX} \
         --no-cache-dir \
         -e /opt/hermes \
+        'pillow==12.3.0' \
         'firecrawl-py>=4.37.0'
+
+# 4.2) 断言：pillow 必须恰好 12.3.0
+#   后面所有 uv pip install -e /opt/hermes / 'Pillow>=10.0.0' 都以它为基线；
+#   一旦被别处带回 13.x，browser-harness 的 ==12.3.0 会在下次安装时重新炸在这里之前。
+RUN /opt/hermes/.venv/bin/python3 -c \
+    "import PIL,sys; v=PIL.__version__; print('pillow =',v); sys.exit(0 if v=='12.3.0' else 1)"
+
 
 # 固化 lazy_deps 的两处版本 pin（消除启动期 lazy-refresh 竞态）
 # 上游已把 lazy_deps.py 改为 shim（无任何 pin）→ 旧 pin 不存在时跳过，匹配到旧 pin 才改写并断言
