@@ -428,7 +428,29 @@ RUN CHROMIUM_REV=$(/opt/hermes/.venv/bin/python3 -c "import json,glob;print(next
 #   ③ 复制一份到 /home/agent/.dev-browser：webui 容器 HOME=/home/agent，否则那边仍会自装
 #   ④ 清掉 daemon.pid / daemon.sock / daemon-spawn.lock：运行时残留不该进镜像
 # ============================================
-RUN npm install -g dev-browser@0.2.9 --registry=https://registry.npmjs.org && \
+# 2026-10-30 修（构建 28/46 偶发超时）：包的 scripts/postinstall.js 从 GitHub Releases
+#   硬编码直链下原生二进制，30s 单次超时、无重试（源码 req.setTimeout(30_000)），本机到
+#   github.com 直链时通时断 → 「Request timed out after 30s」偶发炸整层。不改包源码的修法：
+#   ① --ignore-scripts 跳过 postinstall 在线下载（playwright/quickjs-emscripten 均无
+#      postinstall，实测无副作用；npm bin 软链不受 --ignore-scripts 影响）；
+#   ② curl 三级回退链预取二进制：ghfast.top → gh-proxy.com → GitHub 直链，每级 --retry 3；
+#      产物 sha256 钉死（直链/ghfast/现役镜像内三源实测同一文件），防截断与镜像站漂移；
+#   ③ 手动补跑一次 postinstall —— 二进制已就位时直接短路（只修 bin 软链，零联网）。
+#   升级 dev-browser 版本时三处同步改：@版本、URL 里的 v0.2.9、DB_SHA256。
+RUN npm install -g dev-browser@0.2.9 --ignore-scripts --registry=https://registry.npmjs.org && \
+    DB_PKG="$(npm root -g)/dev-browser" && \
+    DB_BIN="$DB_PKG/bin/dev-browser-linux-x64" && \
+    DB_SHA256=179ee6eb6d27245285fddbac063c24723482314d16b3fb0741dfaf0e63e8c0f6 && \
+    mkdir -p "$DB_PKG/bin" && \
+    ( curl -fL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 120 -o "$DB_BIN" \
+        "https://ghfast.top/https://github.com/SawyerHood/dev-browser/releases/download/v0.2.9/dev-browser-linux-x64" || \
+      curl -fL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 120 -o "$DB_BIN" \
+        "https://gh-proxy.com/https://github.com/SawyerHood/dev-browser/releases/download/v0.2.9/dev-browser-linux-x64" || \
+      curl -fL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 120 -o "$DB_BIN" \
+        "https://github.com/SawyerHood/dev-browser/releases/download/v0.2.9/dev-browser-linux-x64" ) && \
+    echo "$DB_SHA256  $DB_BIN" | sha256sum -c - && \
+    chmod 755 "$DB_BIN" && \
+    node "$DB_PKG/scripts/postinstall.js" && \
     DEV_BROWSER_CHROME="$(ls -d /opt/hermes/.playwright/chromium-*/chrome-linux64/chrome | sort -V | tail -1)" && \
     echo "dev-browser 使用 Chromium: $DEV_BROWSER_CHROME" && \
     DEV_BROWSER_CHROME="$DEV_BROWSER_CHROME" dev-browser install && \

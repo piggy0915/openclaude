@@ -28,13 +28,13 @@ cd "$(dirname "$0")"
 UPSTREAM=${UPSTREAM:-nousresearch/hermes-agent:v0.22.5}
 UPSTREAM_LATEST=${UPSTREAM_DESKTOP:-nousresearch/hermes-agent:latest}
 UPSTREAM_STABLE=${UPSTREAM_DESKTOP:-nousresearch/hermes-agent:stable}
-UPSTREAM_DESKTOP=${UPSTREAM_DESKTOP:-nousresearch/hermes-agent:v0.21.6-desktop}
 UPSTREAM_MAIN=${UPSTREAM_DESKTOP:-nousresearch/hermes-agent:main}
+UPSTREAM_DESKTOP=${UPSTREAM_DESKTOP:-nousresearch/hermes-agent:v0.21.6-desktop}
 TAG_BASE=${TAG_BASE:-hermes-base:main}
 TAG_BASE_DESKTOP=${TAG_BASE_DESKTOP:-hermes-base:main-desktop}
 TAG_HERMES=${TAG_HERMES:-hermes-agent:main}
 TAG_HERMES_DESKTOP=${TAG_HERMES_DESKTOP:-hermes-agent:main-desktop}
-TAG_WEBUI=${WEBUI_IMAGE:-hermes-web-ui:0.7.39}
+TAG_WEBUI=${WEBUI_IMAGE:-hermes-web-ui:0.8.0}
 TARGET=${1:-all}
 
 build_base() {
@@ -48,6 +48,10 @@ build_latest() {
 build_stable() {
   echo "==> [1/4] 公共基座(slim)     $TAG_BASE            ← $UPSTREAM_STABLE"
   docker build -f Dockerfile.base --build-arg BASE_IMAGE="$UPSTREAM_STABLE" -t "$TAG_BASE" .
+}
+build_main() {
+  echo "==> [1/4] 公共基座(slim)     $TAG_BASE            ← $UPSTREAM_MAIN"
+  docker build -f Dockerfile.base --build-arg BASE_IMAGE="$UPSTREAM_MAIN" -t "$TAG_BASE" .
 }
 build_base_desktop() {
   echo "==> [2/4] 公共基座(desktop)  $TAG_BASE_DESKTOP   ← $UPSTREAM_DESKTOP"
@@ -78,6 +82,7 @@ case "$TARGET" in
   base)    build_base ;;
   latest)  build_latest ;;
   stable)  build_stable ;;
+  main)    build_main ;;
   hermes)  build_hermes ;;
   webui)   build_webui ;;
   laya)    build_laya ;;
