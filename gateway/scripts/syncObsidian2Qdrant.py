@@ -42,8 +42,9 @@ QDRANT_PORT = os.environ.get('QDRANT_PORT', '6333')
 QDRANT_COLLECTION = os.environ.get('QDRANT_COLLECTION', 'hermes_knowledge')
 QDRANT_API_KEY = os.environ.get('QDRANT_API_KEY', '')
 EMBEDDING_URL = os.environ.get('EMBEDDING_URL', 'http://embedding-llama:8000/v1/embeddings')
-EMBEDDING_MODEL = os.environ.get('EMBEDDING_MODEL', 'bge-large-zh-v1.5')
-CHUNK_SIZE = int(os.environ.get('CHUNK_SIZE', '350'))   # bge 512 token ~380 中文字，取 350 安全
+EMBEDDING_MODEL = os.environ.get('EMBEDDING_MODEL', 'bge-m3')   # 2026-10-29 换模型（llama.cpp 忽略该字段，仅标注用）
+CHUNK_SIZE = int(os.environ.get('CHUNK_SIZE', '800'))   # 2026-10-29 bge-m3（服务端 -c 4096，每 slot 2048；实测单条上限 ~3500 字）后从 350 放宽到 800：
+#   实测 800 字块 hit@1 与 350 持平、点数减半、块内上下文更完整；1500 字块反而伤精度
 WATCHDOG_ENABLED = os.environ.get('WATCHDOG_ENABLED', '1') == '1'
 EXCLUDE_PATTERNS = ('.obsidian', 'awesome-design-md', '/temp/', '/archive/')
 # md5 去重缓存落盘（2026-10-06）：原先 self.processed 只在内存，容器一重启就丢，

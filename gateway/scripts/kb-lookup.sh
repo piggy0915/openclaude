@@ -15,7 +15,7 @@ c = yaml.safe_load(open("/home/agent/.hermes/config.yaml"))
 v = (c.get("memory") or {}).get("vector_db") or {}
 try:
     vec = httpx.post("http://embedding-llama:8000/v1/embeddings",
-                     json={"input": [q], "model": "bge-large-zh-v1.5"}, timeout=30).json()["data"][0]["embedding"]
+                     json={"input": [q], "model": "bge-m3"}, timeout=30).json()["data"][0]["embedding"]
 except Exception as e:
     print("  ❌ embedding 服务不可用:", str(e)[:120]); raise SystemExit(0)
 cl = QdrantClient(host=v.get("host"), port=int(v.get("port")), api_key=v.get("api_key"), timeout=15, https=False)
@@ -37,14 +37,44 @@ for coll, label in ((v.get("collection") or "hermes_memory", "记忆库"),
         if txt: print("          " + txt)
 PY
 
+# ── 多词全文检索（2026-10-29 修）：原实现用整串 grep，"A B C" 这类多词查询必然零命中。
+#    现按空白拆词：任一关键词命中即算候选，按「命中关键词数」降序取前 N。
+#    kb_search <前N> <路径...> → "命中词数<TAB>文件<TAB>命中词列表"
+kb_search() {
+  local n="$1"; shift
+  local -a kw=()
+  local w f score matched
+  for w in $Q; do kw+=(-e "$w"); done
+  [ "${#kw[@]}" -eq 0 ] && return 0
+  grep -rIl --include="*.md" -F "${kw[@]}" "$@" 2>/dev/null | while read -r f; do
+    score=0; matched=""
+    for w in $Q; do
+      if grep -iqF -- "$w" "$f" 2>/dev/null; then
+        score=$((score + 1)); matched="$matched$w "
+      fi
+    done
+    printf '%d\t%s\t%s\n' "$score" "$f" "$matched"
+  done | sort -t"$(printf '\t')" -k1,1nr | head -n "$n"
+}
+# 取文件里第一个命中行（多词时逐词找，不再要求整串）
+first_hit_line() {
+  local f="$1" w line
+  for w in $Q; do
+    line=$(grep -im1 -F -- "$w" "$f" 2>/dev/null | cut -c1-140)
+    [ -n "$line" ] && { printf '%s\n' "$line"; return 0; }
+  done
+}
+
 echo
 echo "=== ② Obsidian 全文检索（$VAULT）==="
-hits=$(grep -rIl --include="*.md" -- "$Q" "$VAULT" 2>/dev/null | head -5)
-if [ -z "$hits" ]; then echo "  （无命中）"; else
-  echo "$hits" | while read -r f; do
-    echo "  · ${f#$VAULT/}"; grep -im1 -- "$Q" "$f" | cut -c1-140 | sed 's/^/      /'
-  done
-fi
+found2=0
+while IFS=$'	' read -r score f kws; do
+  [ -n "${f:-}" ] || continue
+  found2=1
+  echo "  · ${f#$VAULT/}（命中 $score 词：$kws）"
+  first_hit_line "$f" | sed 's/^/      /'
+done < <(kb_search 5 "$VAULT")
+[ "$found2" = "0" ] && echo "  （无命中）"
 
 echo
 echo "=== ③ Dify 知识库检索（KB_RERANK=${KB_RERANK:-1} 本地精排·默认 | KB_RERANK_POOL=${KB_RERANK_POOL:-5} 候选池 | KB_RERANK=0 秒回）==="
@@ -125,13 +155,10 @@ PYEOF
 
 echo "=== ④ 部署文档检索（docs/ 与 Gitee 仓库文档）==="
 found=0
-while read -r f; do
-  [ -n "$f" ] || continue
+while IFS=$'	' read -r score f kws; do
+  [ -n "${f:-}" ] || continue
   found=1
-  echo "  · $(echo "$f" | sed 's|/home/user/gateway/||; s|/opt/data/hermes-skills/|repo:|')"
-  grep -im1 -- "$Q" "$f" | cut -c1-140 | sed 's/^/      /'
-done <<EOF2
-$(grep -rIl --include="*.md" -- "$Q" /home/user/gateway/docs 2>/dev/null | head -5)
-$(grep -rIl --include="*.md" -- "$Q" /opt/data/hermes-skills/*.md 2>/dev/null | head -3)
-EOF2
+  echo "  · $(echo "$f" | sed 's|/home/user/gateway/||; s|/opt/data/hermes-skills/|repo:|')（命中 $score 词：$kws）"
+  first_hit_line "$f" | sed 's/^/      /'
+done < <(kb_search 8 /home/user/gateway/docs /opt/data/hermes-skills)
 [ "$found" = "0" ] && echo "  （无命中）"

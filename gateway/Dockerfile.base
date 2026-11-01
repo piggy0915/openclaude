@@ -21,7 +21,7 @@ ARG BASE_IMAGE=nousresearch/hermes-agent:main
 FROM ${BASE_IMAGE}
 
 ARG NODE_VERSION=24.22.1
-ARG PLAYWRIGHT_VERSION=1.62.0
+ARG PLAYWRIGHT_VERSION=1.64.1
 ARG PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PIP_EXTRA_INDEX=https://pypi.org/simple
 ARG NPM_REGISTRY=https://registry.npmmirror.com
@@ -462,6 +462,35 @@ RUN npm install -g dev-browser@0.2.9 --ignore-scripts --registry=https://registr
     du -sh /root/.dev-browser
 
 # ============================================
+# 6.3) 再清一次冗余 Chromium revision（必须在 6.2 之后）
+# ------------------------------------------------------------
+# 为什么需要这一层（实测 2026-11-01）：
+#   6.1 的清理在 6.2 之前执行，而 6.2 的 `dev-browser install` 会用它**自带**的
+#   playwright-core 再下一套 chromium-1208（DEV_BROWSER_CHROME 拦不住，见 6.2 注释）。
+#   → 6.1 清完又被装回来，最终镜像里同时躺着两套：
+#       chromium-1208            364M
+#       chromium_headless_shell-1208  254M   小计 618M（注释里写的 ~110M 是低估）
+#   故在最后再按 browsers.json 期望 revision 清一次；只保留 6) 装的那一套。
+#   ⚠ 实测更正（2026-11-01 01:40）：dev-browser **不能**只留一套。它 daemon.mjs 里的
+#   `DEV_BROWSER_CHROME` 根本不生效（全文件 grep 无该变量引用），走的是它自带
+#   playwright-core 的默认 revision（当前 1208 / Chrome 145），删掉就报
+#     launchPersistentContext: Executable doesn't exist at .../chromium-1208/...
+#   → 故本层改为**白名单**：venv 的 revision + dev-browser 的 revision 两套都留，
+#     只清「第三套以后」的累积垃圾。两套共存约 1.3GB，这是 dev-browser 的固有代价。
+# ============================================
+RUN PY_REV=$(/opt/hermes/.venv/bin/python3 -c "import json,glob;print(next(b['revision'] for p in glob.glob('/opt/hermes/.venv/**/playwright/driver/package/browsers.json',recursive=True) for b in json.load(open(p))['browsers'] if b['name']=='chromium'))") && \
+    DB_JSON=$(ls -1 /usr/local/lib/node_modules/dev-browser/node_modules/playwright-core/browsers.json /usr/local/lib/node_modules/dev-browser/node_modules/playwright/node_modules/playwright-core/browsers.json 2>/dev/null | head -1) && \
+    DB_REV=$(python3 -c "import json,sys;print(next(b['revision'] for b in json.load(open('$DB_JSON'))['browsers'] if b['name']=='chromium'))") && \
+    echo "keep revisions: venv=$PY_REV  dev-browser=$DB_REV" && \
+    for d in /opt/hermes/.playwright/chromium-* /opt/hermes/.playwright/chromium_headless_shell-*; do \
+        [ -d "$d" ] || continue; \
+        case "$d" in *-"$PY_REV"|*-"$DB_REV") echo "keep   $d" ;; *) echo "remove stale $d"; rm -rf "$d" ;; esac; \
+    done && \
+    du -sh /opt/hermes/.playwright && \
+    test -x "/opt/hermes/.playwright/chromium-$PY_REV/chrome-linux64/chrome" && \
+    test -x "/opt/hermes/.playwright/chromium-$DB_REV/chrome-linux64/chrome"
+
+# ============================================
 # 7) Ekko Studio MCP（自包含单文件，两容器共用；不再依赖宿主 /app）
 # ============================================
 COPY app/bin/ekko-studio-mcp.mjs app/bin/hermes-studio-mcp.mjs app/bin/hermes-web-ui-mcp.mjs /opt/ekko/bin/
@@ -538,6 +567,29 @@ RUN /opt/hermes/.venv/bin/python3 -c \
         "import sqlite3,sys; v=sqlite3.sqlite_version; print('sqlite:',v); sys.exit(0 if v>='3.51.3' else 1)"
 
 # ============================================
+# 9.5) Bun（our-free-model v2.7.x 的 OpenCode 免费车道硬依赖）
+#   为什么进镜像：OFM 免费车道调用原生 Bun（不是 npm 包）。放 /opt/data 卷
+#     虽能持久，但无版本声明、换卷/换机即丢，与 node/uv 同属工具链，按本文件
+#     既定规矩固化成版本可控的镜像层。
+#   为什么放在最末（而非紧邻第 3 节）：插在中间会让 4-10 节全部缓存失效，
+#     本次就要全量重建 base；放尾部只新增一层。日后若 1-10 节有变更，本层会
+#     重新下载 ~50MB 资产，可接受。
+#   源：npm 镜像 /-/binary/bun/ 全量资产（GitHub Releases 直连在本机常 000）；
+#     解包用 python3.zipfile，避免为 unzip 改第 2 节 apt 层而打穿缓存。
+#   体积：单二进制 ~103MB。
+# ============================================
+ARG BUN_VERSION=1.4.4
+RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in amd64) BUN_ARCH=x64;; arm64) BUN_ARCH=aarch64;; *) BUN_ARCH=$ARCH;; esac \
+    && mkdir -p /opt/bun/bin \
+    && curl -fsSL --retry 3 "${NPM_REGISTRY}/-/binary/bun/bun-v${BUN_VERSION}/bun-linux-${BUN_ARCH}.zip" -o /tmp/bun.zip \
+    && python3 -c "import zipfile,sys;zipfile.ZipFile('/tmp/bun.zip').extractall('/tmp/bunx')" \
+    && install -m 0755 "/tmp/bunx/bun-linux-${BUN_ARCH}/bun" /opt/bun/bin/bun \
+    && rm -rf /tmp/bun.zip /tmp/bunx \
+    && ln -sf /opt/bun/bin/bun /usr/local/bin/bun \
+    && bun --version
+
+# ============================================
 # 10) 路径 / 环境收尾
 # ============================================
 RUN mkdir -p /home/agent/.local/bin && \
@@ -546,4 +598,4 @@ RUN mkdir -p /home/agent/.local/bin && \
     printf 'export PYTHONPATH="/opt/hermes${PYTHONPATH:+:${PYTHONPATH}}"\n' >> /etc/profile.d/hermes.sh && \
     printf 'export PYTHONPATH="/opt/hermes${PYTHONPATH:+:${PYTHONPATH}}"\n' >> /home/agent/.bashrc
 
-ENV PATH=/opt/hermes/.venv/bin:/home/agent/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/data/npm-global/bin
+ENV PATH=/opt/hermes/.venv/bin:/home/agent/.local/bin:/opt/bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/data/npm-global/bin

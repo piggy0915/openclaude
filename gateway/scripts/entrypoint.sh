@@ -12,6 +12,12 @@ if [ "$(id -u)" = "0" ]; then
     if [ -d "/home/agent" ]; then
         # 修复所有权
         chown -R 10000:10000 /home/agent 2>/dev/null || true
+
+        # ⚠️ 例外：HERMES_HOME 顶层必须属于 gateway 用户（root）。
+        # hermes_cli/gateway_runtime_discovery.py 的 _private_node() 用 expected_uid = os.getuid()
+        # 校验目录与 gateway.sock 的 owner，gateway 以 root 运行时若目录属 10000，
+        # `hermes -z` 会报 unsafe_control_path 而无法连网关。只改目录本身，不递归。
+        chown 0:0 /home/agent/.hermes 2>/dev/null || true
         
         # 设置目录权限
         chmod -R 775 /home/agent 2>/dev/null || true
@@ -178,6 +184,16 @@ if [ -f /opt/hermes/scripts/docker_config_migrate.py ] && [ -z "${HERMES_SKIP_CO
         $MIGRATE_CMD 2>&1 | sed 's/^/[config-migrate] /'
     fi
     echo "[config-migrate] done（失败不阻断；配置有 10 分钟快照可回滚）"
+fi
+
+# —— Our Free Model standalone（2026-10-19）——
+# 容器 pid1 是 docker-init + 单进程收尾，没有运行时 supervisor，
+# 故在此挂自启：源码与数据在持久卷 /opt/data（重建容器不丢）。
+# 端口 18900 仅回环，供本容器内的 Hermes 调用；跨机器请用 226(:18901)。
+if [ -x /opt/data/scripts/ofm-supervise.sh ]; then
+    /opt/data/scripts/ofm-supervise.sh || echo "⚠ ofm-supervise 启动失败（不阻断启动）"
+else
+    echo "ℹ ofm-supervise 未安装（跳过）"
 fi
 
 exec /opt/hermes/.venv/bin/hermes gateway run
