@@ -801,7 +801,7 @@ services:
   hermes-webui:
     stop_grace_period: 30s
     init: true            # 2026-09-30：PID1 是 node 应用，同样需要 init 回收僵尸
-    image: ${WEBUI_IMAGE:-hermes-web-ui:0.8.12}
+    image: ${WEBUI_IMAGE:-hermes-web-ui:0.8.15}
     container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
     # 2026-09-18：固定 DNS（同上）
     dns:
@@ -810,10 +810,20 @@ services:
       - 114.114.114.114
 #    user: "${UID:-1000}:${GID:-1000}"
     ports:
+      # 2026-10-31 端口收敛（实测取证）：原先 8651/56121/50000-50127udp 直接绑 0.0.0.0，
+      #   但三者都不需要对外：
+      #   · 8651  预览前端只被容器内 127.0.0.1:8651 探活（version-preview-manager.ts:634，
+      #     PREVIEW_FRONTEND_URL=http://localhost:8651）；浏览器侧的 localhost 指用户自己机器。
+      #   · 56121 xAI OAuth 回调 server 起在容器内（xai-auth.ts:19/247），回调同样落在浏览器端
+      #     localhost；远程走 SSH 隧道即可，不依赖对外发布。
+      #   · 50000-50127/udp 是 Studio P2P(WebRTC ICE) 候选段（p2p-network.ts:95 读同一 env）。
+      #     实测：容器内该段无 UDP 监听、宿主 nc -zu 50000 连接被拒；仅 App 直连协商时才启用。
+      #   → 默认绑宿主回环（等于不对外），功能不受影响；确需对外时改这三个变量即可，例如
+      #     PREVIEW_FRONTEND_HOST=0.0.0.0 / XAI_OAUTH_HOST=0.0.0.0 / STUDIO_P2P_PUBLISH=0.0.0.0
       - "${PORT:-6060}:${PORT:-6060}"
-      - "${PREVIEW_FRONTEND_PORT:-8651}:8651"
-      - "${XAI_OAUTH_PORT:-56121}:56121"
-      - "${STUDIO_P2P_UDP_PORT_RANGE:-50000-50127}:${STUDIO_P2P_UDP_PORT_RANGE:-50000-50127}/udp"
+      - "${PREVIEW_FRONTEND_HOST:-127.0.0.1}:${PREVIEW_FRONTEND_PORT:-8651}:8651"
+      - "${XAI_OAUTH_HOST:-127.0.0.1}:${XAI_OAUTH_PORT:-56121}:56121"
+      - "${STUDIO_P2P_PUBLISH:-127.0.0.1}:${STUDIO_P2P_UDP_PORT_RANGE:-50000-50127}:${STUDIO_P2P_UDP_PORT_RANGE:-50000-50127}/udp"
     env_file:
       - ./config/.env
     volumes:
