@@ -25,7 +25,7 @@ cd "$(dirname "$0")"
 
 # 2026-10-08 升到 v0.21.6（官方 v0.21.6 起启用平台化 tag：slim=:v0.21.6-amd64 / desktop=:v0.21.6-amd64-desktop）
 # 回退到浮动 tag：UPSTREAM=nousresearch/hermes-agent:main ./build.sh
-UPSTREAM=${UPSTREAM:-nousresearch/hermes-agent:v0.23.0}
+UPSTREAM=${UPSTREAM:-nousresearch/hermes-agent:v0.23.1}
 UPSTREAM_LATEST=${UPSTREAM_DESKTOP:-nousresearch/hermes-agent:latest}
 UPSTREAM_STABLE=${UPSTREAM_DESKTOP:-nousresearch/hermes-agent:stable}
 UPSTREAM_MAIN=${UPSTREAM_DESKTOP:-nousresearch/hermes-agent:main}
@@ -34,7 +34,7 @@ TAG_BASE=${TAG_BASE:-hermes-base:main}
 TAG_BASE_DESKTOP=${TAG_BASE_DESKTOP:-hermes-base:main-desktop}
 TAG_HERMES=${TAG_HERMES:-hermes-agent:main}
 TAG_HERMES_DESKTOP=${TAG_HERMES_DESKTOP:-hermes-agent:main-desktop}
-TAG_WEBUI=${WEBUI_IMAGE:-hermes-web-ui:0.8.19}
+TAG_WEBUI=${WEBUI_IMAGE:-hermes-web-ui:0.8.20}
 TARGET=${1:-all}
 
 build_base() {
