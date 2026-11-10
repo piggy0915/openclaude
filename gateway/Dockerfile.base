@@ -555,6 +555,7 @@ RUN set -eu; \
         "import sqlite3; v=sqlite3.sqlite_version; print(f'✅ SQLite upgraded: {v}'); assert v>='3.51.3'"; \
     rm -rf /tmp/sqlite-autoconf-*
 
+COPY native/ /opt/hermes/native/
 # 8.6 CJK FTS5 扩展（镜像内 /usr/local/lib）
 RUN cd /opt/hermes/native/fts5_cjk && \
     gcc -shared -fPIC -O2 -Wall -I/usr/local/include fts5_cjk.c -o libfts5_cjk.so && \
@@ -590,46 +591,37 @@ RUN ARCH=$(dpkg --print-architecture) \
     && bun --version
 
 # ============================================
-# 9.6) OpenCode —— 常驻编码 worker（v2.2.x，`opencode serve` 暴露 HTTP API）
+# 9.6) OpenCode v2 CLI（2026-11-07）
 # ------------------------------------------------------------
-# 为什么进镜像：与 openclaude / reasonix / ocr / loopx / bun 同一约定 —— 工具链
-#   统一固化在 hermes-base，派生镜像禁止另装一份（见本文件头注释）。放 /opt/data
-#   卷虽能持久，但无版本声明、换卷/换机即丢，且 hermes 与 hermes-webui 两个容器
-#   都要用（进镜像一次两者都有；放卷则要么争用要么各放一份 ~484MB）。
-# 为什么装 @opencode/cli-linux-x64 而不是主包 @opencode/cli：
-#   主包把 12 个 per-platform optionalDependency 都写进依赖，npm 在禁 postinstall
-#   策略下不会清理未用变体 —— 实测装出 962MB（cli-linux-x64 / -baseline /
-#   -musl / -baseline-musl 四个 linux 变体各 ~242MB 全留下）；直接装单平台包
-#   实测 242MB / 3 秒（added 1 package）。该包无 bin 字段、不生成软链，
-#   故下面显式建包装脚本。
-# 为什么用 XDG 重定向包装脚本而非裸软链二进制：
-#   容器全局 XDG_DATA_HOME=/home/agent/.hermes（compose 注入），opencode 会把
-#   data/cache/config/state 全部写进 Hermes 自己的 home —— 实测 `debug paths`
-#   落点 /home/agent/.hermes/opencode/opencode.db，污染 Hermes home 且与自身
-#   缓存混堆。包装脚本把四个 XDG 根统一定到持久卷 /opt/data/opencode
-#   （可用 OPENCODE_HOME 覆盖），二进制本体不进卷。
-# 版本：pin 2.2.5（v2 线 latest，2026-11-07 实测 registry.npmmirror.com 已镜像）。
-#   升级只改 ARG；跨大版本前先跑 `opencode serve` 冒烟 —— v1 与 v2 是两套 API。
+# 为什么在这里：编码 worker 只有它带完整 HTTP 契约（会话/中断/权限/diff/SSE）。
+# 为什么装单平台包：主包 @opencode/cli 装出 962MB（4 个 linux 变体各 242MB 全留），
+#   @opencode/cli-linux-x64 只 242MB/3s。后者 package.json 无 bin 字段，
+#   postinstall 在 npm 禁脚本策略下也不执行 → 不生成软链，故由本层自建包装脚本。
+# 为什么包装脚本不用裸软链：容器全局 XDG_DATA_HOME=/home/agent/.hermes，
+#   裸跑会把 opencode.db 写进 Hermes 自己的 home（实测 debug paths 落到
+#   /home/agent/.hermes/opencode/）。包装脚本把 4 个 XDG 根重定向到持久卷。
+# 为什么 --registry=npmmirror：官方源在本机被按域名阻断，npmmirror 有该平台包。
+#   注意与 5.1/5.2 相反 —— 那两个包 npmmirror 缺 per-platform 可选依赖才走官方源。
+# 配置/会话在持久卷 /opt/data/opencode（compose 的 opt_data_volume），
+#   不写进镜像（否则被卷遮蔽）；密钥走 {env:VAR} 引用，不落盘。
 # ============================================
 ARG OPENCODE_VERSION=2.2.5
 RUN export PATH="/usr/local/bin:$PATH" && \
-    npm install -g "@opencode/cli-linux-x64@${OPENCODE_VERSION}" \
-        --registry=${NPM_REGISTRY} && \
+    npm install -g "@opencode/cli-linux-x64@${OPENCODE_VERSION}" --registry=${NPM_REGISTRY} && \
     test -x /usr/local/lib/node_modules/@opencode/cli-linux-x64/bin/opencode && \
     printf '%s\n' \
         '#!/bin/sh' \
-        '# OpenCode wrapper: 把 XDG 根重定向到持久卷，避免污染 Hermes home' \
-        'OC_ROOT="${OPENCODE_HOME:-/opt/data/opencode}"' \
+        '# opencode 包装脚本：把 XDG 四根重定向到持久卷 /opt/data/opencode（镜像层 9.6 节生成）' \
+        'OC_ROOT=/opt/data/opencode' \
         'export XDG_DATA_HOME="$OC_ROOT/data"' \
-        'export XDG_CACHE_HOME="$OC_ROOT/cache"' \
         'export XDG_CONFIG_HOME="$OC_ROOT/config"' \
+        'export XDG_CACHE_HOME="$OC_ROOT/cache"' \
         'export XDG_STATE_HOME="$OC_ROOT/state"' \
         'exec /usr/local/lib/node_modules/@opencode/cli-linux-x64/bin/opencode "$@"' \
-      > /usr/local/bin/opencode && \
+        > /usr/local/bin/opencode && \
     chmod 0755 /usr/local/bin/opencode && \
-    opencode --version && \
-    rm -rf /opt/data/opencode && \
-    npm cache clean --force
+    mkdir -p /opt/data/opencode/data /opt/data/opencode/config /opt/data/opencode/cache /opt/data/opencode/state && \
+    /usr/local/bin/opencode --version
 
 # ============================================
 # 10) 路径 / 环境收尾
