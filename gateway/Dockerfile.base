@@ -494,13 +494,19 @@ RUN PY_REV=$(/opt/hermes/.venv/bin/python3 -c "import json,glob;print(next(b['re
 # 7) Ekko Studio MCP（自包含单文件，两容器共用；不再依赖宿主 /app）
 # ============================================
 COPY app/bin/ekko-studio-mcp.mjs app/bin/hermes-studio-mcp.mjs app/bin/hermes-web-ui-mcp.mjs /opt/ekko/bin/
+COPY app/bin/plugins.mjs /opt/ekko/bin/plugins.mjs
 COPY app/bin/browser/ /opt/ekko/bin/browser/
 COPY app/package.json /opt/ekko/package.json
 # CRLF 归一：源 app/bin/*.mjs 由 Ekko 构建生成，恒为 CRLF；直接执行报 env: 'node\r'
-#   注意：ekko-studio-mcp.mjs 依赖 ./browser/jev.mjs（新增 import），browser/ 目录必须一并拷入并归一行结尾
+#   注意：ekko-studio-mcp.mjs 依赖 ./browser/jev.mjs 与 ./plugins.mjs（两个新增 import），
+#        除 browser/ 外 plugins.mjs 也必须一并拷入；漏拷会让 4 个 ekko MCP server 全部
+#        "Connection closed"（ERR_MODULE_NOT_FOUND），且 node --check 只验单文件语法查不出来。
 RUN sed -i 's/\r$//' /opt/ekko/bin/*.mjs /opt/ekko/bin/browser/*.mjs && \
     node --check /opt/ekko/bin/ekko-studio-mcp.mjs && \
     node --check /opt/ekko/bin/browser/jev.mjs && \
+    node --check /opt/ekko/bin/plugins.mjs && \
+    node -e "import('/opt/ekko/bin/ekko-studio-mcp.mjs').catch(e=>{if(e.code==='ERR_MODULE_NOT_FOUND'){console.error('MISSING DEP:',e.message);process.exit(1)}})" && \
+    test -f /opt/ekko/bin/plugins.mjs && \
     echo "Ekko MCP installed at /opt/ekko/bin"
 
 # ============================================
