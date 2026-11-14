@@ -7,7 +7,7 @@ services:
 
   # ---------- 支撑组件 ----------
   postgres:
-    image: postgres:18-alpine
+    image: pgvector/pgvector:pg18
     container_name: postgres
     restart: unless-stopped
     environment:
@@ -455,7 +455,7 @@ services:
           memory: 1G
 
   obsidian:
-    image: ghcr.io/linuxserver/obsidian:1.14.4
+    image: ghcr.io/linuxserver/obsidian:1.15.0
     container_name: obsidian
     security_opt:
       - no-new-privileges:false
@@ -548,7 +548,7 @@ services:
   # SearXNG - 自建元搜索引擎（免费无限次搜索）
   # ============================================================
   searxng:
-    image: searxng/searxng:2026.10.19-81371861f   # 2026-10-05 升级（原 2026.8.22-9fea41204）
+    image: searxng/searxng:2026.11.13-219b63b20   # 2026-10-05 升级（原 2026.8.22-9fea41204）
     container_name: searxng
     restart: unless-stopped
 #    depends_on:
@@ -592,7 +592,7 @@ services:
   # Qdrant - 高性能向量数据库（替代 ChromaDB）
   # ============================================================
   qdrant:
-    image: qdrant/qdrant:v1.19.2
+    image: qdrant/qdrant:v1.20.1
     container_name: qdrant
     restart: unless-stopped
     ports:
@@ -1076,7 +1076,7 @@ services:
 
   # DeepTutor - 天津高二自学平台（数据已迁移至宿主 bind ./data/deeptutor，原 docker volume deeptutor-data 留存备份）
   deeptutor:
-    image: ghcr.io/hkuds/deeptutor:latest
+    image: ghcr.io/hkuds/deeptutor:1.7.2
     container_name: deeptutor
     restart: unless-stopped
     ports:
@@ -1098,7 +1098,7 @@ services:
 
   # Next AI Draw.io - AI 画图工作台（secrets 统一走 config/.env，与其他服务一致）
   next-ai-drawio:
-    image: ghcr.io/dayuanjiang/next-ai-draw-io:latest
+    image: ghcr.io/dayuanjiang/next-ai-draw-io:0.5.1
     container_name: next-ai-drawio
     restart: unless-stopped
     ports:
@@ -1132,7 +1132,7 @@ services:
   #  ③ 挂载 supervisor 覆盖：内置 mcp-server 原 autorestart=false，
   #     2026-10-20 22:39 收到 SIGTERM 优雅退出后永不重启（实测 EXITED，/mcp 返 404）→ 改为 autorestart=true。
   prompt-optimizer:
-    image: linshen/prompt-optimizer:2.11.12
+    image: linshen/prompt-optimizer:2.15.2
     container_name: prompt-optimizer
     restart: unless-stopped
     ports:
@@ -1242,7 +1242,7 @@ services:
   # ⚠️ 宿主端口不能用 3001（已被 nginx-obsidian 占用）→ 默认 3030
   # ⚠️ 上游定位「个人实验用」，无 SLA；勿设为默认模型、勿放关键路径
   freellmapi:
-    image: ghcr.io/tashfeenahmed/freellmapi:main
+    image: ghcr.io/tashfeenahmed/freellmapi:v0.16.28
     container_name: freellmapi
     restart: unless-stopped
     init: true
