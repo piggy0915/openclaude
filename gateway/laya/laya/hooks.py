@@ -1,14 +1,17 @@
 """Opt-in prediction hooks: observe or shape every decision without forking.
 
-A hook is either a plain callable or an object implementing any subset of the lifecycle
-methods on `Hook`. Hooks are configured on `Agent` / `Router` and can be overridden per call.
-Everything here is pure Python: importing `laya` must not start pulling torch.
+A hook on `hooks=` is an object implementing any subset of the lifecycle methods on `Hook`;
+a plain callable is only accepted on the single-event `on_predict_start=` / `on_predict_end=`
+parameters, because `hooks=` reads for method names and a bare function has none. Hooks are
+configured on `Agent` / `Router` and can be overridden per call. Everything here is pure
+Python: importing `laya` must not start pulling torch.
 """
 from __future__ import annotations
 
 import asyncio
 import contextvars
 import inspect
+import math
 import threading
 import time
 import uuid
@@ -245,12 +248,23 @@ def validate_timeout(value: Optional[float]) -> Optional[float]:
     A non-positive timeout is rejected here rather than left to
     ``thread.join``: ``join(0)`` and ``join(-1)`` return before the hook has
     started, so the outcome of a fast hook with such a value is a race.
+    Non-finite values are rejected too: ``join(nan)`` raises ``ValueError`` and
+    ``join(inf)`` raises ``OverflowError`` instead of waiting.
+    A bool is rejected as well: ``float(True)`` is ``1.0``, so ``hooks_timeout=True`` would
+    otherwise install a one-second deadline on every hook call that the caller never asked for.
     """
     if value is None:
         return None
+    if isinstance(value, bool):
+        # `False` would be refused below as a non-positive number, which is the wrong reason for a
+        # wrong type; `True` was accepted as 1.0. The message names the type so a caller reading it
+        # learns what they passed, not just that it was too small. `laya/mcp/tools.py` refuses bools
+        # first, so an MCP caller still hears `invalid_hooks_timeout` rather than this ValueError.
+        raise ValueError(
+            "hooks_timeout must be a positive finite number or None, not a bool; got %r" % (value,))
     timeout = float(value)
-    if timeout <= 0:
-        raise ValueError("hooks_timeout must be a positive number or None; got %r" % (value,))
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("hooks_timeout must be a positive finite number or None; got %r" % (value,))
     return timeout
 
 
@@ -284,12 +298,16 @@ def run_coroutine_sync(coro: Awaitable[Any], loop: Optional[asyncio.AbstractEven
     """
     if loop is not None:
         if not loop.is_running():
+            if asyncio.iscoroutine(coro):
+                coro.close()
             raise ValueError("run_coroutine_sync: the loop passed is not running")
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:
             running = None
         if loop is running:
+            if asyncio.iscoroutine(coro):
+                coro.close()
             raise ValueError(
                 "run_coroutine_sync: the loop passed is running in the calling thread; "
                 "blocking on it would deadlock"
@@ -390,8 +408,11 @@ class HookRegistry:
 
             with agent.hooks_installed(tracer):
                 agent.system_one(state, questions)
+
+        Each argument is one hook or a sequence of them, matching `add_hook` and the
+        `hooks=` parameter, so `hooks_installed([tracer, meter])` works too.
         """
-        added = normalise_hooks(list(hooks))
+        added = normalise_hooks([hook for arg in hooks for hook in _as_sequence(arg)])
         self._extend_hooks(added)
         try:
             yield self

@@ -2,8 +2,9 @@
 
 `Router` chooses a checkpoint for each request and loads its `Agent` when prediction needs it.
 The default router sends English text to the English checkpoint and other supported languages to
-the multilingual checkpoint. You can override that choice, supply your own language hint, or select
-the typed-decisions checkpoint explicitly.
+the multilingual checkpoint. Text whose language it cannot place follows `default`, which is the
+multilingual checkpoint since 0.4.0. You can override that choice, supply your own language hint, or
+select the typed-decisions checkpoint explicitly.
 
 This guide covers model selection and lifecycle. For the question types accepted by prediction,
 see [Structured decisions](structured.md); for lifecycle callbacks, see [Prediction hooks](hooks/index.md).
@@ -51,7 +52,7 @@ Routing checks inputs in this order:
 4. A recognized `lang=` value selects English or multilingual.
 5. A per-call `lang_guess=` or the router's configured `lang_guess` is consulted.
 6. Built-in script and language analysis selects a checkpoint. If there is no reliable language
-   signal, the router uses its configured `default` (English by default).
+   signal, the router uses its configured `default` (multilingual since 0.4.0).
 
 The first matching rule wins. For example, `model="multilingual"` overrides `lang="en"`. Invalid
 model names raise `ValueError` instead of falling through to detection.
@@ -124,6 +125,23 @@ question wording, and adding unrelated question IDs prevents an exact match.
 router = Router(auto_task_detection=True)
 ```
 
+## Registering your own checkpoints
+
+`Router(models=...)` and `Router.register(name, source, description=None)` accept any name beside the
+three built-in ones. A source is a Hub repo id, a `(repo, subfolder)` pair or a local directory. A
+registered checkpoint loads, is evicted and unloads like a built-in, and is named in `model=` or
+`task=` like one. `Router.registered` lists the registered checkpoints and `Router.unregister(name)`
+removes one. A name one edit from a built-in, such as `englsh` for `english`, is still registered
+as its own checkpoint and a warning names the built-in, which is left unchanged.
+
+```python
+router = Router(models={"papers": "/models/laya-papers"})
+router.register("tone", ("acme/laya-tone", None), description="tone of voice")
+result = router.predict(state, questions, model="papers")
+```
+
+`normalise_name` still knows only the built-in names, while `Router.resolve` also knows the registry.
+
 ## Inspect routing without loading models
 
 Use `route()` to inspect one decision or `route_batch()` to inspect a sequence. Neither method
@@ -188,9 +206,12 @@ requests = [
 results = router.predict_batch(requests, batch_size=8)
 ```
 
-Each request requires `state` and `questions`; it may also include `model`, `task`, `lang`, or
-`lang_guess`. Requests sharing a checkpoint and question schema can share an Agent batch forward
-pass. Different schemas or checkpoints are handled in separate groups. `batch_size` limits the
+Each request requires `state` and `questions`; it may also include the routing overrides `model`,
+`task`, `lang` and `lang_guess`, or the token budgets `max_len` and `head_max_len`. Those are the
+same arguments `predict()` takes, applied per item, so a wide question does not shrink the batch's
+other states to the same window. Requests sharing a checkpoint, question schema and token budget
+can share an Agent batch forward pass; a different schema, checkpoint or budget is grouped
+separately, since one Agent batch carries one budget for all its states. `batch_size` limits the
 number of states passed together to the Agent; results still correspond to the request order.
 
 ## Choosing an entry point

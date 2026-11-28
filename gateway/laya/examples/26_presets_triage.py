@@ -8,10 +8,10 @@ from _common import laya, banner, describe, device_line, heading, load
 
 banner("26", "Preset: support triage", """
     `triage_questions()` is a ready-made schema for inbound support: five questions, one
-    forward pass. It mixes all three primitives -- a multi-way choice, two yes/no
+    forward pass. It mixes all three primitives -- a multi-way choice, three yes/no
     probabilities, and an ordinal score -- so a single call fills a whole triage record.
 
-    The ticket below is an enterprise customer who has been double charged for three
+    The ticket below is from an enterprise customer who has been double charged for three
     months, had tickets ignored, and threatens to leave. Every field except `is_urgent`
     comes back decisive.
     """)

@@ -9,8 +9,222 @@ runs the whole loop on Kaggle's free 2xT4 GPUs: build the dataset, train with RL
 calibration temperatures, evaluate, and push the result to the Hub. This page walks that
 notebook and points at the parts that stay load-bearing when you swap the data for your own.
 
+The same loop is in the package. `laya-train` runs it on one device from a CSV or a JSONL of
+labelled decisions in one command, and `laya.train.finetune` does the same from Python; both are
+described first below, before the notebook.
+
 The other worked example — a browser-agent decision head on a single 16 GB GPU with no paid API
 — is at [Fine-tuning Laya as a browser-agent decision head](finetune_browser_agent.md).
+
+## Fine-tune with `laya-train`
+
+`laya-train` (also `laya train`) builds the training items, fine-tunes, fits calibration
+temperatures on a slice held out before training, and saves a checkpoint `laya.load` opens. It
+runs on one device: CUDA, MPS or CPU.
+
+### From a CSV
+
+One row per decision, with the text in one column and the correct label in another:
+
+```bash
+laya-train --data tickets.csv --text-column body --label-column department \
+           --base english --out ./tickets-checkpoint
+```
+
+The label column becomes a choice question over its distinct values, in the order they first
+appear, with the id given by `--question-id` (default `label`) and the instructions given by
+`--instructions`. The question is saved as `questions.json` beside the checkpoint; ask the
+fine-tuned model the same question at inference:
+
+```python
+import json, laya
+
+agent = laya.load("./tickets-checkpoint")
+questions = json.load(open("./tickets-checkpoint/questions.json"))
+print(agent.predict("We were billed twice for March.", questions)["answers"])
+```
+
+Files saved from Excel with a byte-order mark are read as usual. Rows with an empty text or label
+are skipped and counted.
+
+### From JSONL
+
+Each line is one case, and a case may ask several questions of any type. Two label shapes are
+read, and a file may mix them:
+
+```json
+{"state": "We were billed twice for March.",
+ "questions": {"department": {"type": "choice", "instructions": "Which team should handle this?",
+                              "criteria": {"billing": "invoices, refunds", "technical": "bugs, outages"}},
+               "urgent": {"type": "noul", "instructions": "Does this need an answer today?"}},
+ "expected": {"department": "billing", "urgent": true}}
+```
+
+- `expected` holds one answer per question, the format `laya-evals` reads, so the same file can
+  train a checkpoint and evaluate it: a choice label, `true`/`false` for a noul, and a level for a
+  score (a fractional level such as `1.5` splits its weight between levels 1 and 2).
+  `--label-smoothing 0.1` moves a tenth of each answer's weight to the other options.
+- `gold` holds a teacher's probabilities per question, the notebook's schema:
+  `{"department": {"probabilities": {"billing": 0.9, "technical": 0.1}}}`. Noul probabilities are
+  keyed `"false"`/`"true"` and score probabilities by the level index as a string.
+
+### Check the data before a long run
+
+```bash
+laya-train --data tickets.csv --text-column body --label-column department --dry-run
+```
+
+`--dry-run` builds the training items with the tokenizer and config of `--base`, without loading
+its weights or training, and prints how many rows were read, how many items they produced, how many
+questions were skipped and why, and the optimizer-update budget the configured defaults will spend
+(see [Sizing a run in optimizer updates](#sizing-a-run-in-optimizer-updates)):
+
+| reason | the question was skipped because |
+|---|---|
+| `empty_text`, `empty_label` | the row had no text, or the question no answer |
+| `invalid_question`, `invalid_target` | the question or its answer could not be read |
+| `options_collapsed` | the head budget left two options with the same tokens (#538) |
+| `options_beyond_max_len` | the question's options do not fit in `max_len` |
+
+### Sizing a run in optimizer updates
+
+`--epochs`, `--micro-batch` and `--grad-accum` decide how much training a run gets, but the number
+that matters is the optimizer updates it performs. An epoch is split into
+`ceil(items / micro_batch)` micro-batches; one update runs per `grad_accum` micro-batches, plus one
+for the final partial window of each epoch, which steps once even when it holds fewer:
+
+```
+updates = epochs * ceil(ceil(train_items / micro_batch) / grad_accum)
+```
+
+`--dry-run` and the start of a run both print this budget, from the post-calibration training
+count, with the effective batch:
+
+```
+optimizer budget: 1100 train item(s), effective batch up to 64 (micro_batch 8 x grad_accum 8), 72 optimizer updates over 4 epoch(s)
+```
+
+The defaults (4 epochs, effective batch 64) are the notebook's. On typed-decisions' 6,000
+decisions the default 400-item calibration slice leaves 5,600 training items, so a default run
+spends **352** updates — 376 only if no slice were held out. That number is a reference for
+comparing runs of different sizes, not a cutoff: 1,100 *training* items at the same settings give
+72 updates (64 when 1,100 is the pre-split count and the 10% slice holds 110 out), and
+[#963](https://github.com/NandhaKishorM/laya/issues/963) measured a head that collapsed there while
+8 epochs still failed on the task itself. A small dataset therefore needs more epochs to reach a
+similar update count.
+
+### What a run writes
+
+`--out` gets the layout `laya.load` reads (`model.safetensors`, `encoder/`, `tokenizer/`,
+`rl_agent_config.json`), plus `questions.json` and a `checkpoint_latest/` rewritten after every
+epoch, so a crash costs at most an epoch.
+
+The config records the `max_len` and `head_max_len` the run used, the training settings under
+`training.laya_train`, and a calibration report under `training.laya_train_calibration`: per
+question type, how many calibration items the temperature rests on, their accuracy and mean
+confidence, and what to doubt. The same issues are printed as warnings during the run:
+
+```
+laya.train: choice calibration: not fitted: 2 calibration items, fewer than 10, so the temperature stays 1.0
+```
+
+A warning like that means the checkpoint's confidences were not calibrated; don't gate on
+`min_confidence` with it until a run with more data fits them.
+
+### Diagnose a run that stays at chance
+
+If a fine-tune never rises above the class prior, accuracy alone cannot say whether the task is
+hard or the budget is wrong. A label-encoding positive control separates the two: prepend a tag
+that spells the answer (for example `label=<department>; `) to every training and test text, and
+fine-tune on that copy. The model can read the answer off the tag, so the same budget has a
+trivially learnable signal to fit.
+
+- Positive control fails to learn → suspect the budget, the optimization or the run setup, not the
+  task.
+- Positive control reaches 1.00 while the real task stays at the prior → the evidence points at
+  task or representation difficulty rather than too few updates.
+  [#963](https://github.com/NandhaKishorM/laya/issues/963) measured both at 8 epochs: the positive
+  control reached 1.00 while the real task still collapsed.
+
+A passing positive control only shows the run can fit a deliberately easy signal; it is not proof
+that the real task is learnable or that the checkpoint generalizes.
+
+Takeoff near the ln K plateau is also seed-dependent, so one run is not evidence either way.
+[#963](https://github.com/NandhaKishorM/laya/issues/963) saw 9 of 15 runs leave the plateau and 6
+never do within 32 epochs, on identical data and configuration. Repeat the run with different seeds
+before concluding that a task is unlearnable or that a budget is fine, and read the collapse
+warning the run prints before gating on `min_confidence`.
+
+### Options
+
+| flag | default | what it changes |
+|---|---|---|
+| `--base` | `convaiinnovations/laya` | checkpoint to start from: a directory, a built-in name (`english`, `multilingual`, `typed-decisions`) or a Hub repo id |
+| `--loss` | `rlcd` | `rlcd` is the notebook's objective; `soft-ce` trains on the soft cross-entropy alone (#741) |
+| `--shuffle-options` | off | re-encodes choice questions with a random option order every epoch, with the answer moved to match |
+| `--label-smoothing` | `0.0` | weight moved off single answers |
+| `--freeze-encoder` | off | trains the decision head only; fits a small GPU or a CPU, but gains much less than a full fine-tune |
+| `--epochs`, `--micro-batch`, `--grad-accum` | 4, 8, 8 | the notebook's 4 epochs and effective batch of 64 |
+| `--encoder-lr`, `--head-lr` | 2.5e-5, 1e-4 | learning rates |
+| `--max-len`, `--head-max-len` | the base checkpoint's | token budgets; the notebook uses 1024 and 256 |
+| `--eval`, `--eval-data` | none | a second dataset, answered before and after the fine-tune. Without it the "after" numbers come from the calibration slice; the run's report says which of the two it is (`eval_mode`, `is_held_out`, `note`), and rows whose state and question also occur in the training or calibration inputs count as overlap and stop the metrics being held out (#967) |
+| `--target-error` | `0.10` | the error the run fits the checkpoint's per-bucket abstention thresholds to keep among the answers it accepts |
+| `--min-abstain-n` | `10` | a bucket with fewer items than this is left out of that map, and `resolve_min_confidence` gates that option count at 0.0 -- nothing abstains -- unless the caller sets `min_confidence` itself |
+| `--device`, `--seed` | `auto`, 0 | |
+
+Mixed precision is on for CUDA. On a GPU where fp16 runs slower than fp32 (the GTX 16xx cards, for
+example), set `amp=False` in `TrainConfig` from Python.
+
+### What the options are worth
+
+Full fine-tunes of `convaiinnovations/laya` on one T4 per run, with the notebook's settings, from
+[#887](https://github.com/NandhaKishorM/laya/issues/887).
+
+On typed-decisions (6,000 training decisions, all 2,000 test decisions, one seed):
+
+| run | accuracy | ECE | choice answers that change with the options reversed |
+|---|---|---|---|
+| base checkpoint | 0.362 | 0.174 | 0.357 |
+| `--loss rlcd` (the default) | 0.7715 | 0.150 | 0.065 |
+| `--loss soft-ce` | 0.790 | 0.157 | 0.078 |
+| `--loss soft-ce --shuffle-options` | 0.7875 | 0.159 | 0.062 |
+
+On MASSIVE intent in English, with 20 options per question (11,514 training rows, all 2,974 test
+cases, each also answered in 3 shuffled orders; `--loss soft-ce`, two seeds per row):
+
+| run | accuracy | answers that change when the options are reordered |
+|---|---|---|
+| base checkpoint | 0.730 | 0.187 |
+| without `--shuffle-options` | 0.936 | 0.026 |
+| with `--shuffle-options` | 0.941 | 0.019 |
+
+With 4 options, fine-tuning alone already makes answers stable under reordering, and shuffling
+changes nothing measurable. With 20 options it raises accuracy by 0.55 points and cuts the answers
+that change by about a quarter, both significant over the two seeds, for about 14% more training
+time. Use it when questions have many options.
+
+## Fine-tuning from Python
+
+`laya.train.finetune` is what `laya-train` calls:
+
+```python
+import laya
+from laya.train import TrainConfig, finetune
+
+report = finetune("train.jsonl", "english", "./my-checkpoint",
+                  TrainConfig(loss="soft-ce", shuffle_options=("choice",)))
+print(report["train_items"], report["skipped"], report["calibration"])
+
+agent = laya.load("./my-checkpoint")
+```
+
+`TrainConfig()` has the defaults in the table above, plus the settings the command does not
+expose: `amp` and `gradient_checkpointing` (on for CUDA by default), the calibration slice
+(`calib_max=400` items or `calib_frac=0.1`, whichever is smaller), and `option_layout`. The
+returned report has `train_items`, `calibration_items`, `skipped`, `epoch_loss`, the fitted
+`temperature` and `temperature_by_options`, and the `calibration` report. For a data pipeline of
+your own, `train_model` and `calibration_records` are the two halves `finetune` is built from; the
+[API reference](reference/train.md) lists them all.
 
 ## What the notebook does, in order
 

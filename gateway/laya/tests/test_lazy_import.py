@@ -79,6 +79,125 @@ check("from-import of a lazy name", laya.Agent.__name__, "Agent")
 check("__dir__ lists lazy names", "load" in dir(laya), True)
 
 
+# ------------------------------------------------------------------ USE_TF guard (#915)
+# On transformers 4.x the model path reaches `transformers.modeling_utils` for `no_init_weights`,
+# and importing that module runs a chain (`loss_utils` -> `loss_d_fine` ->
+# `loss_for_object_detection` -> `image_transforms`) that ends in `import tensorflow`. Where
+# TensorFlow is installed but cannot load, that is a native crash, not an exception -- `Fatal
+# Python error: Bus error` -- out of a library laya never uses. `laya/__init__.py` now sets
+# `USE_TF=0` before anything can import transformers.
+#
+# The check is done in a subprocess because transformers decides TensorFlow's availability when it
+# is first imported: by the time this file is running, transformers is already in `sys.modules`, so
+# an in-process assertion could not tell "the guard worked" from "it was too late but harmless".
+TF_GUARD = r'''
+import os, sys
+sys.path.insert(0, %r)
+os.environ.pop("USE_TF", None)
+
+# Make TensorFlow unavailable the way a broken install is, but as an ImportError rather than a
+# segfault: if laya's import chain reaches for it at all, the import fails loudly here.
+class Blocker:
+    def find_spec(self, name, path=None, target=None):
+        if name == "tensorflow" or name.startswith("tensorflow."):
+            raise ImportError("tensorflow blocked")
+        return None
+sys.meta_path.insert(0, Blocker())
+
+import laya
+print(os.environ.get("USE_TF"), "tensorflow" in sys.modules)
+''' % ROOT
+
+guard = subprocess.run([sys.executable, "-c", TF_GUARD], capture_output=True, text=True)
+check("USE_TF/import laya succeeds with tensorflow blocked", guard.returncode, 0)
+gout = guard.stdout.strip().split()
+check("USE_TF/is set to 0 on import", gout[0] if gout else None, "0")
+check("USE_TF/tensorflow is not imported", gout[1] if len(gout) > 1 else None, "False")
+
+# ...and a caller who set it deliberately keeps their value: `setdefault`, not assignment. `1` is
+# the interesting one, because it is the value that asks FOR tensorflow and must survive.
+RESPECT = r'''
+import os, sys
+sys.path.insert(0, %r)
+import laya
+print(os.environ["USE_TF"])
+''' % ROOT
+
+for preset in ("1", "0"):
+    env = dict(os.environ, USE_TF=preset)
+    resp = subprocess.run([sys.executable, "-c", RESPECT], capture_output=True, text=True, env=env)
+    check("USE_TF/a caller's %r is preserved" % preset, resp.stdout.strip(), preset)
+
+
+# ------------------------------------------------------------------ the mcp extra's import surface
+# `laya/mcp/__init__.py` documents that "the submodules ``device``, ``remote`` and ``tools`` are
+# importable without the ``mcp`` dependency; only ``server`` requires the extra." Nothing checks it.
+# Both CI lanes that run this suite install `-e ".[mcp,serve,langchain]"` (ci.yml:94 and :225), so
+# `import mcp` always succeeds there, and `tests/test_mcp.py` skips wholesale when the extra is
+# absent -- so a module-level `from mcp.types import ...` added to `tools.py` would break the
+# documented path for every install without the extra and leave CI green. Blocked as an
+# ImportError here rather than left missing, so reaching for it fails loudly at the exact import.
+NO_MCP = r'''
+import sys
+sys.path.insert(0, %r)
+class Blocker:
+    def find_spec(self, name, path=None, target=None):
+        if name == "mcp" or name.startswith("mcp."):
+            raise ImportError("mcp blocked")
+        return None
+sys.meta_path.insert(0, Blocker())
+
+import laya
+import laya.mcp
+import laya.mcp.device  # noqa: F401
+import laya.mcp.remote  # noqa: F401
+import laya.mcp.tools  # noqa: F401
+assert "mcp" not in sys.modules, "the laya.mcp import surface pulled in the mcp dependency"
+print("ok")
+try:
+    import laya.mcp.server  # noqa: F401
+    print("imported without the extra")
+    print("")
+except ImportError as exc:
+    print(type(exc).__name__)
+    print(str(exc))
+''' % ROOT
+
+nomcp = subprocess.run([sys.executable, "-c", NO_MCP], capture_output=True, text=True)
+lines = nomcp.stdout.splitlines()
+check("no-mcp/import laya.mcp succeeds", nomcp.returncode, 0)
+check("no-mcp/device, remote and tools import without the extra", lines[0] if lines else None, "ok")
+check("no-mcp/server fails as an ImportError", lines[1] if len(lines) > 1 else None, "ImportError")
+# The hint is the documented install path (`pip install "laya[mcp]"`), so name both halves of it
+# rather than the whole sentence: a reworded message is fine, a bare "No module named 'mcp'" is not.
+check("no-mcp/server names the extra and how to install it",
+      [part for part in ("laya[mcp]", "pip install") if part not in (lines[2] if len(lines) > 2 else "")],
+      [])
+
+# ...and the same surface stays pure-Python without torch, which is this file's own premise: `remote`
+# reaches for `laya.serve` and `laya.router`, `tools` for `laya.confidence`/`hooks`/`presets`.
+NO_MCP_NO_TORCH = r'''
+import sys
+sys.path.insert(0, %r)
+class Blocker:
+    def find_spec(self, name, path=None, target=None):
+        for dep in ("mcp", "torch"):
+            if name == dep or name.startswith(dep + "."):
+                raise ImportError(dep + " blocked")
+        return None
+sys.meta_path.insert(0, Blocker())
+
+import laya.mcp.device  # noqa: F401
+import laya.mcp.remote  # noqa: F401
+import laya.mcp.tools  # noqa: F401
+print(sorted(dep for dep in ("mcp", "torch") if dep in sys.modules))
+''' % ROOT
+
+lean = subprocess.run([sys.executable, "-c", NO_MCP_NO_TORCH], capture_output=True, text=True)
+check("no-mcp-no-torch/the mcp surface imports", lean.returncode, 0)
+check("no-mcp-no-torch/neither heavy dependency is imported", lean.stdout.strip(), "[]")
+
+
 print("\n%d passed, %d failed" % (len(PASS), len(FAIL)))
 for f in FAIL:
     print("  FAIL", f)

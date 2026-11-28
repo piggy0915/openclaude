@@ -33,18 +33,46 @@ inside JavaScript through its local ONNX runtime, without a Python server.
 Requests contain `state` and `questions`. Unless configured or supplied for a
 prediction, `laya-client` omits `model`, letting `laya-serve` select a local
 checkpoint automatically. A client-wide or per-call `model` can select a local
-checkpoint. Choice label arrays are normalized to maps with null descriptions
-before transport.
+checkpoint, as can the other per-request controls in the table below. Choice label
+arrays are normalized to maps with null descriptions before transport.
 
 Responses preserve `model`, `answers`, and token `usage`. Laya's `routing` and
 answer `action` fields are optional extensions; Noul confidence is optional too.
 Choice and Score confidence, distributions, and Score legends remain required.
+Every answer carries `answer_confidence`, the `max(p)` mass on the reported answer,
+which is the same quantity on all three question types. A call that passed
+`min_confidence` reports `abstention` and `abstention_threshold` on each of its
+answers and `low_confidence: true` on the ones below the threshold; with no
+threshold set, none of those three keys are sent, and that absence is the report.
 Optional extensions are validated when present.
 
-`/v1/systemone` does not expose Python's standalone routing method or `task` and
-`lang` overrides. The SDK rejects those legacy options instead of silently
-ignoring them. Laya's public `/health` returns `status`, `loaded`, and `device`.
-Prediction never probes health first.
+`predict` posts `/v1/systemone` and `health` gets `/health` -- those two calls are the client's whole
+network surface, and `/v1/systemone` is the only inference endpoint among them. There is no standalone
+routing method: `laya-client` exposes `predict` and `health` and nothing else, and the live integration
+test asserts the server answers `404` for `/v1/route`. The controls the endpoint does honour are
+per-request, and each is sent only when the caller supplied the option -- an absent option leaves the
+deployment's own `Router(...)` settings in charge instead of overriding them with a client-side default:
+
+| option | request field |
+| --- | --- |
+| `model` | `model` |
+| `task` | `task` |
+| `lang` | `lang` |
+| `langGuess` | `lang_guess` |
+| `maxLen` | `max_len` |
+| `headMaxLen` | `head_max_len` |
+| `minConfidence` | `min_confidence` |
+
+An option that cannot mean anything is refused locally, before the request goes out: a blank `task`, a
+budget that is not a positive integer, a threshold outside `[0, 1]`, or a threshold map that is empty
+or holds a value outside `[0, 1]`. Nothing is silently ignored. Laya's
+public `/health` returns `status`, `loaded`, `revisions`, `device`, `device_is_preference`,
+`checkpoint_devices`, and `cpu_fallbacks` to a caller it can authenticate, plus
+`idle_unload_seconds` and `idle_seconds` on a deployment that sets `LAYA_IDLE_UNLOAD_SECONDS` --
+seven keys, or nine there, exactly as [HTTP API](http-api.md) documents them. An anonymous probe
+on a deployment with `LAYA_API_KEY` set gets `{"status": "ok"}` alone, because the withheld fields
+name resident checkpoints, their revisions and the host's device state; that body is a healthy
+response, and `health()` returns it rather than raising. Prediction never probes health first.
 
 FastAPI detail strings and validation arrays are preserved as `LayaAPIError`
 messages/details. Structured error envelopes from compatible backends are also
@@ -54,8 +82,9 @@ are never retried automatically.
 ## Verification and release
 
 Unit tests cover request construction, all answer shapes, Laya extensions,
-FastAPI errors, JSON validation, deadlines and cancellation.
-Type checks cover optional metadata, rejected legacy methods/options, inferred
+FastAPI errors, JSON validation, deadlines and cancellation, and hold this
+page's control table to the fields the client actually puts on the wire.
+Type checks cover optional metadata, inferred
 answer types, and ESM/CommonJS consumers. The live integration test starts the
 unchanged `laya.serve` application with a tiny offline checkpoint, compares SDK
 predictions against direct Python inference, and exercises routing, presets,

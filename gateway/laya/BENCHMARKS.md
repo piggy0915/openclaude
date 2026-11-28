@@ -32,7 +32,7 @@ The raw-temperature column reproduces the committed file, so the only variable l
 | macro ECE | 0.3869 | **0.3911** |
 | languages clearing 3× random | 45 / 51 | **48 / 51** |
 
-The direction is consistent rather than noise: of the 16 languages that move by 0.05 or more, **every one moves up** (`bn` 0.29 → 0.45, `kn` 0.15 → 0.30, `hy` 0.15 → 0.25), and none move down by that much. `laya`'s columns are unchanged by the refresh — they reproduce the committed file to the last stored digit — so the accuracy spread between the two checkpoints is wider than the committed table suggested, and `en` remains the one language where `laya` wins (0.820 against 0.710).
+The direction is consistent rather than noise: of the 16 languages that move by 0.05 or more, **15 move up** (`bn` 0.29 → 0.45, `kn` 0.15 → 0.30, `hy` 0.15 → 0.25) and `sv` is the one that moves down (0.57 → 0.49). `laya`'s columns are unchanged by the refresh — they reproduce the committed file to the last stored digit — so the accuracy spread between the two checkpoints is wider than the committed table suggested, and `en` remains the one language where `laya` wins (0.820 against 0.710).
 
 ---
 
@@ -120,8 +120,15 @@ Headline Laya cells for AG News and DAIR Emotion are the Applications-run number
 
 ### English vs the rest
 
-| task | | laya | laya-multilingual |
-|---|---|---|---|
+Source: the T4 Colab run (`research/scripts/laya_benchmark_colab.ipynb`, seed 13, 20 options per
+choice question, the first 300 test rows per language) — `research/results/t4_colab_benchmark.json`.
+"Other languages" is the average over the 13 non-English MASSIVE languages and the 14 non-English
+XNLI languages; each language contributed exactly 300 questions, so averaging the languages and
+pooling the questions give the same figure. `tests/test_doc_tables.py` checks every cell of this
+table, and both copies in README.md, against the artifact.
+
+| task | laya | laya-multilingual |
+|---|---|---|
 | MASSIVE intent — English | **0.783** | 0.657 |
 | MASSIVE intent — other languages | 0.306 | **0.451** |
 | MASSIVE scenario — English | **0.603** | 0.560 |
@@ -153,7 +160,7 @@ Each is real labelled data, 400 cases, all three checkpoints. *held out* means t
 
 ### On the public datasets where Jev numbers exist
 
-Laya columns are from the same Applications run (`research/results/app_benchmark_results.json`, N=400 per task), so AG News / DAIR Emotion differ slightly from the committed T4 English suites below (N=600: 0.947 / 0.573 for `laya`).
+Laya columns are from the same Applications run (`research/results/app_benchmark_results.json`, N=400 per task), so AG News / DAIR Emotion differ slightly from the committed T4 English suites above (N=600: 0.947 / 0.573 for `laya`).
 
 | dataset | laya | laya-multilingual | laya-typed-decisions | Jev (published) |
 |---|---|---|---|---|
@@ -170,7 +177,7 @@ banking77 is the one clear loss, and it is architectural: a choice question's op
 | model | accuracy | soft acc | Brier | ECE | score MAE |
 |---|---|---|---|---|---|
 | `laya-typed-decisions` | **0.766** | 0.471 | 0.061 | 0.213 | 0.242 |
-| `laya` | 0.362 | 0.332 | 0.316 | 0.175 | 0.694 |
+| `laya` | 0.362 | 0.331 | 0.315 | 0.174 | 0.694 |
 | `laya-multilingual` | 0.352 | 0.328 | 0.463 | 0.314 | 0.760 |
 | *Jev 1.13.0 (published)* | *0.727* | *0.580* | *0.148* | *0.144* | *0.391* |
 | *teacher ceiling* | *0.735* | *—* | *—* | *—* | *—* |
@@ -268,6 +275,84 @@ The best setting is the physical core count plus a little, not one thread per vC
 | 10 | 2608.7 ms | **96.9 ms** | 102.5 ms | 26.9x |
 
 CPU scales roughly linearly with question count (288.2 -> 2608.7 ms, 9.1x for 10x the questions), while XPU scales sub-linearly (29.7 -> 96.9 ms, 3.3x), so the speedup widens from ~10x to ~27x. The XPU p95 stays within ~6% of its p50 on every row (30.4, 46.8, 102.5). At one question the Arc B390 is slightly faster than the T4's 32.8 ms p50 above.
+
+### Apple M1 Pro, MPS — fp16 autocast against fp32
+
+On MPS, `Agent` autocasts a forward to fp16 at or above `mps_amp_min_rows` question rows (default 5, `LAYA_MPS_AMP_MIN_ROWS`). The default came from one M5 (#109), where fp16 won from four rows. On an M1 Pro (16 GB, macOS 26.1, torch 2.14.0, transformers 5.17.0, laya 0.3.26) it loses almost everywhere. `benchmarks/bench_mps_autocast.py` runs every request once in fp32 and once in fp16 on the same loaded agent, back to back with the order alternating, so both modes see the same load (the machine was not idle: 1-min load 6 to 10). 72 pairs per row: 24 states, three passes. A short state is one message, a long one a thread of six. Results in `benchmarks/results/mps_autocast_*_m1pro.json`.
+
+`english` (ModernBERT-large), median ms, and fp16 minus fp32 per request:
+
+| state | rows | fp32 | fp16 | fp16 − fp32 | max probability change |
+|---|---|---|---|---|---|
+| short | 1 | 58.2 | 79.4 | +21.0 | 0.0011 |
+| short | 4 | 147.6 | 170.4 | +23.6 | 0.0061 |
+| short | 5 | 190.4 | 213.6 | +22.9 | 0.0061 |
+| short | 8 | 290.6 | 316.4 | +28.6 | 0.0061 |
+| long | 1 | 133.7 | 157.3 | +24.2 | 0.0081 |
+| long | 4 | 458.1 | 492.6 | +23.8 | 0.0081 |
+| long | 5 | 394.4 | 403.3 | +9.1 | 0.0081 |
+| long | 8 | 585.5 | 566.6 | **−13.7** | 0.0081 |
+
+`multilingual` (mmBERT-base):
+
+| state | rows | fp32 | fp16 | fp16 − fp32 | max probability change |
+|---|---|---|---|---|---|
+| short | 1 | 25.5 | 34.7 | +9.8 | 0.0038 |
+| short | 4 | 45.9 | 55.7 | +9.9 | 0.0038 |
+| short | 5 | 56.4 | 66.5 | +10.3 | 0.0038 |
+| short | 8 | 78.1 | 90.9 | +11.8 | 0.0038 |
+| long | 1 | 44.0 | 53.7 | +9.3 | 0.0107 |
+| long | 4 | 145.4 | 157.1 | +11.7 | 0.0106 |
+| long | 5 | 183.6 | 195.1 | +12.9 | 0.0106 |
+| long | 8 | 267.6 | 283.6 | +17.2 | 0.0206 |
+
+fp16 costs about 20 to 30 ms per request on `english` and about 10 ms on `multilingual`, whatever the row count; it only wins on long `english` states with eight rows. So at the default of 5 an M1 Pro pays for autocast on every request of five or more rows. `LAYA_MPS_AMP_MIN_ROWS=1000000` keeps fp32 throughout.
+
+Of 1,248 decisions per checkpoint, fp16 changed none on `english` and one on `multilingual` (a `noul` next to 0.5). A decision near the boundary can flip.
+
+### Apple M5 Pro, MPS: fp16 autocast against fp32
+
+The same script, unchanged, on an Apple M5 Pro (24 GB, macOS 27.0.1, Python 3.12, torch 2.14.1, transformers 5.19.0, laya 0.4.6). Same protocol: 72 pairs per row, 24 states, three passes, fp32 and fp16 back to back on one loaded agent with the order alternating. The machine was lightly loaded (1-min load 4.3 during `english`, 0.8 during `multilingual`). Results in `benchmarks/results/mps_autocast_*_m5pro.json`.
+
+Here the gate goes the way #109 measured on its M5, and further: fp16 wins from two rows on short states and from one row on long states, on both checkpoints.
+
+`english` (ModernBERT-large), median ms, and fp16 minus fp32 per request:
+
+| state | rows | fp32 | fp16 | fp16 - fp32 | max probability change |
+|---|---|---|---|---|---|
+| short | 1 | 25.6 | 25.5 | -0.3 | 0.0018 |
+| short | 2 | 36.6 | 30.3 | -5.8 | 0.0018 |
+| short | 4 | 64.4 | 40.2 | -23.7 | 0.0031 |
+| short | 5 | 74.3 | 44.7 | -29.4 | 0.0031 |
+| short | 6 | 84.5 | 49.1 | -35.3 | 0.0031 |
+| short | 8 | 110.3 | 59.0 | -51.1 | 0.0126 |
+| long | 1 | 48.8 | 34.3 | -15.0 | 0.0012 |
+| long | 2 | 86.6 | 50.8 | -36.7 | 0.0012 |
+| long | 4 | 165.1 | 79.0 | -86.5 | 0.0014 |
+| long | 5 | 203.5 | 93.3 | -110.6 | 0.0014 |
+| long | 6 | 241.4 | 108.1 | -133.7 | 0.0014 |
+| long | 8 | 312.6 | 135.7 | -177.4 | 0.0021 |
+
+`multilingual` (mmBERT-base):
+
+| state | rows | fp32 | fp16 | fp16 - fp32 | max probability change |
+|---|---|---|---|---|---|
+| short | 1 | 12.1 | 13.4 | +1.3 | 0.0022 |
+| short | 2 | 17.2 | 16.3 | -1.1 | 0.0022 |
+| short | 4 | 25.5 | 19.7 | -5.8 | 0.0022 |
+| short | 5 | 30.7 | 22.2 | -8.4 | 0.0022 |
+| short | 6 | 34.9 | 24.5 | -10.5 | 0.0022 |
+| short | 8 | 44.3 | 29.6 | -14.6 | 0.0022 |
+| long | 1 | 21.5 | 17.3 | -4.3 | 0.0020 |
+| long | 2 | 36.4 | 25.0 | -11.7 | 0.0021 |
+| long | 4 | 69.0 | 40.4 | -27.8 | 0.0021 |
+| long | 5 | 79.8 | 45.0 | -35.0 | 0.0021 |
+| long | 6 | 95.1 | 52.3 | -43.0 | 0.0050 |
+| long | 8 | 123.3 | 65.2 | -58.7 | 0.0050 |
+
+The saving grows with the work in the request: on `english` long states fp16 is 2.3x faster at eight rows (312.6 to 135.7 ms), and the only cell where fp32 wins is a single short `multilingual` row, by 1.3 ms. So at the default of 5 an M5 Pro runs rows 2 to 4 (and every long single-row request) in fp32 when fp16 would have been faster, while an M1 Pro pays for fp16 from row 5 up. The two tables bracket the current default; which way it should move, or whether it should depend on the chip, is a separate decision. `LAYA_MPS_AMP_MIN_ROWS=1` takes fp16 everywhere on an M5 Pro.
+
+Of 1,248 decisions per checkpoint, fp16 changed one on `english` (a short state at eight rows, where the largest probability change was 0.0126) and none on `multilingual`.
 
 ### Calibration on a routing task runs the other way
 

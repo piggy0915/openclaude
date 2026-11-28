@@ -5,16 +5,16 @@ raise when you might expect them to. Nothing here is inferred from the documenta
 """
 import os
 
-from _common import laya, MODELS, banner, device_line, heading, load
+from _common import LOCAL_MODELS, banner, device_line, heading, laya, load
 
 from laya.router import Router
 
 banner("39", "Error handling", """
     Five things a caller should be ready for:
 
-      1. an unknown model name passed to `Router`  -> ValueError, before anything loads;
+      1. a typo in `model=` on a `Router`           -> ValueError, before anything loads;
       2. `laya.load` on a missing local path       -> FileNotFoundError;
-      3. a `choice` question with empty criteria   -> a low-level RuntimeError, not an answer;
+      3. a `choice` question with empty criteria   -> ValueError naming it, before the model runs;
       4. a question whose options do not fit       -> ValueError, but only once they overflow;
       5. a `noul` whose probability is near 0.5    -> a perfectly ordinary answer, not an error.
 
@@ -24,16 +24,25 @@ banner("39", "Error handling", """
 
 TICKET = {"body": "I was charged twice and also my login is broken. Can someone look into it?"}
 
-heading("1. Router with an unknown model name")
+heading("1. A typo in `model=` on a Router")
+# A name `Router(models=...)` does not know is not a typo: it registers a checkpoint of your own
+# under that name -- a fine-tune in a local directory, a repo you pushed -- served beside the
+# built-ins and loaded only when a request routes to it. The typo is in the request.
+router = Router(models={"bogus": "/nowhere/at/all"})
+print("   Router(models={'bogus': ...}) registered it beside the built-ins: %s" % sorted(router.registered))
 try:
-    Router(models={"bogus": "/nowhere/at/all"})
+    router.route(TICKET, {"q": {"type": "noul", "instructions": "Is this about billing?"}}, model="bogsu")
     print("   no exception raised")
 except ValueError as e:
     print("   raised ValueError: %s" % e)
-print("   -> the name is normalised in the constructor, so a typo fails before any weights load.")
+print("   -> `model=` is resolved against the built-ins plus what you registered, so a typo fails")
+print("      before any weights load; nothing is downloaded until a request routes to a name.")
 
 heading("2. laya.load on a path that does not exist")
-missing = os.path.join(os.path.dirname(MODELS["english"]), "does-not-exist")
+# `LOCAL_MODELS` is the directory each checkpoint would live in; `MODELS` is the `Router` spec,
+# which `_common.checkpoint` returns as `(repo, subfolder)` when `models/` is not in the checkout.
+# A path has to come from the first one.
+missing = os.path.join(LOCAL_MODELS["english"], "does-not-exist")
 try:
     laya.load(missing)
     print("   no exception raised")
@@ -52,8 +61,10 @@ for criteria in ({}, []):
         print("   criteria=%r -> no exception, answer=%r" % (criteria, answer["answers"]["q"]))
     except Exception as e:
         print("   criteria=%r -> %s: %s" % (criteria, type(e).__name__, e))
-print("   -> both the empty dict and the empty list reach the scorer with zero options and blow")
-print("      up in top-k. No answer dict is returned; treat an empty schema as a caller bug.")
+print("   -> neither form reaches the decision head. `Agent._check_question` runs inside")
+print("      `predict_batch`, before the state is encoded, and raises ValueError naming the")
+print("      question and what to add -- so an empty schema is a caller bug with a message that")
+print("      says which of twenty questions to fix, not a low-level crash to pattern-match.")
 two = agent.predict(TICKET, {"q": {"type": "choice", "instructions": "Pick one",
                                    "criteria": {"a": None, "b": None}}})["answers"]["q"]
 print("   (a two-option question with None descriptions is fine: a=%.3f b=%.3f)"
@@ -70,7 +81,7 @@ for name, criteria in (("120 options", VERY_LARGE), ("160 options", LARGE)):
               % (name, answer["choice"], answer["confidence"]))
     except ValueError as e:
         print("   %s -> raised ValueError: %s" % (name, e))
-print("   -> the guard is `len(markers) != len(render_options(q))`: markers past max_len are")
+print("   -> the guard is `len(markers) != stats['options']`: markers past max_len are")
 print("      dropped, so it fires only when whole option blocks fall out of the window. 120")
 print("      options slip through with a tiny per-label budget -- low accuracy, no warning.")
 

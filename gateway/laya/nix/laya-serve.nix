@@ -157,6 +157,18 @@ in
       description = "Build the checkpoints at startup rather than lazily on first request.";
     };
 
+    idleUnloadSeconds = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.unsigned;
+      default = null;
+      example = 300;
+      description = ''
+        Unload resident checkpoints after this many idle seconds (sets
+        `LAYA_IDLE_UNLOAD_SECONDS`). The next request pays a cold load.
+        Zero disables unloading; null leaves the server's default, also off.
+        Device caches are released, but the process allocator may retain RAM pages.
+      '';
+    };
+
     threads = lib.mkOption {
       type = lib.types.nullOr lib.types.ints.positive;
       default = null;
@@ -227,6 +239,32 @@ in
       '';
     };
 
+    maxBatchTokens = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      example = 262144;
+      description = ''
+        Tokens one /v1/systemone/batch FORWARD PASS may collate -- states x
+        questions x the row width (sets `LAYA_MAX_BATCH_TOKENS`). A larger batch
+        is split across several passes, not refused. null leaves the server's own
+        default.
+      '';
+    };
+
+    tournamentGroup = lib.mkOption {
+      type = lib.types.nullOr (lib.types.ints.between 2 100);
+      default = null;
+      example = 16;
+      description = ''
+        Answer a `choice` with more options than this by elimination, in groups
+        of this size, on /v1/systemone and /v1/systemone/batch (sets
+        `LAYA_TOURNAMENT_GROUP`), and raise their option cap from 100 to 255.
+        Every option still comes back in `probabilities`; one eliminated in an
+        earlier round carries 0.0. null leaves it off, so every choice is read
+        in one pass as before.
+      '';
+    };
+
     revision = lib.mkOption {
       type = lib.types.nullOr (lib.types.strMatching "[A-Za-z0-9._/-]+");
       default = null;
@@ -244,6 +282,38 @@ in
       description = "Let the router auto-select the typed-decisions checkpoint when question ids match its workflows.";
     };
 
+    jevStrict = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Project every `/v1/systemone` answer onto the strict Jev wire contract
+        (sets `LAYA_JEV_STRICT`): only the fields the vendor Jev API itself
+        returns — `model`/`answers`/`usage` at the root, the contracted keys per
+        answer, and a two-key `usage`. Nothing is recomputed; every value is the
+        one the result already carries. A client that validates the response
+        against the contract with no extra fields rejects the full payload, so
+        this makes the server usable with such clients; OpenClaw's
+        `@openclaw/typesafe` decision provider is one. Default off, full payload
+        unchanged.
+      '';
+    };
+
+    extraModels = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = ''{"my-checkpoint": "/var/lib/laya/my-checkpoint"}'';
+      description = ''
+        Checkpoints to register beside the bundled ones (sets
+        `LAYA_EXTRA_MODELS`), as a JSON object mapping a name to its source: a
+        Hub repo id, a local checkpoint directory, or a `["repo", "subfolder"]`
+        pair. A name matching a bundled checkpoint re-points it, which is how a
+        fine-tune is served under `english` without a code change. The server
+        parses and validates this at startup and refuses to start on a malformed
+        value or a name it will not accept, so this module passes it through
+        rather than restating the rules. null registers nothing.
+      '';
+    };
+
     defaultModel = lib.mkOption {
       type = lib.types.nullOr (lib.types.strMatching "[A-Za-z0-9._/-]+");
       default = null;
@@ -251,13 +321,13 @@ in
       description = ''
         Checkpoint a state with no language evidence falls back to (sets
         `LAYA_DEFAULT_MODEL`): text with no letters at all, or Latin script too
-        short to identify a language. Set it to `multilingual` when most traffic
-        on this host is not English. Text the detector can place is routed on
+        short to identify a language. Set it to `english` when most traffic
+        on this host is English. Text the detector can place is routed on
         what it detects, so this is a fallback and not a pin. The spellings
         accepted, and the aliases among them, are laya's own -- the server
         checks the value against them at startup and refuses to start on a name
         it does not know, so this module deliberately lists none. null leaves
-        laya's default, which is `english`.
+        laya's default, which is `multilingual`.
       '';
     };
 
@@ -299,9 +369,12 @@ in
         LAYA_PRELOAD = if cfg.preload then "1" else "0";
         LAYA_MODELS = lib.concatStringsSep "," cfg.models;
         LAYA_AUTO_TASK = if cfg.autoTaskDetection then "1" else "0";
+        LAYA_JEV_STRICT = if cfg.jevStrict then "1" else "0";
       } // lib.optionalAttrs (cfg.threads != null) {
         LAYA_THREADS = toString cfg.threads;
         OMP_NUM_THREADS = toString cfg.threads;
+      } // lib.optionalAttrs (cfg.idleUnloadSeconds != null) {
+        LAYA_IDLE_UNLOAD_SECONDS = toString cfg.idleUnloadSeconds;
       } // lib.optionalAttrs (cfg.rootPath != null) {
         LAYA_ROOT_PATH = cfg.rootPath;
       } // lib.optionalAttrs (cfg.logLevel != null) {
@@ -318,8 +391,14 @@ in
         LAYA_MAX_LOADED = toString cfg.maxLoaded;
       } // lib.optionalAttrs (cfg.maxTokenBudget != null) {
         LAYA_MAX_TOKEN_BUDGET = toString cfg.maxTokenBudget;
+      } // lib.optionalAttrs (cfg.maxBatchTokens != null) {
+        LAYA_MAX_BATCH_TOKENS = toString cfg.maxBatchTokens;
+      } // lib.optionalAttrs (cfg.tournamentGroup != null) {
+        LAYA_TOURNAMENT_GROUP = toString cfg.tournamentGroup;
       } // lib.optionalAttrs (cfg.revision != null) {
         LAYA_REVISION = cfg.revision;
+      } // lib.optionalAttrs (cfg.extraModels != null) {
+        LAYA_EXTRA_MODELS = cfg.extraModels;
       } // lib.optionalAttrs (cfg.defaultModel != null) {
         LAYA_DEFAULT_MODEL = cfg.defaultModel;
       } // {

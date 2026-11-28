@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from laya.common import QTYPES, TEMP_MAX, TEMP_MIN, clamp_temperature, temp_bucket  # noqa: E402
 from laya.lang import analyse, detect_script, guess_latin_language, is_english, state_text  # noqa: E402
+from laya.lang import _non_english_segment  # noqa: E402
 from laya.router import (  # noqa: E402
     BUNDLE_REPO,
     DEFAULT_MODELS,
@@ -134,7 +135,9 @@ check("latin_lang/long english stays en",
 # `github` + `com`, so every domain in a state scored a Portuguese hit: two of them crossed the
 # margin and sent an English state with links in it to the multilingual checkpoint, reported as
 # Portuguese. A token whose dot or @ joins word characters is an identifier, not prose.
-_r_dotted = Router()
+# `default="english"` because this block is about identifiers not reading as foreign prose, not
+# about what the stock default is: a state of bare identifiers is language-undecided either way.
+_r_dotted = Router(default="english")
 for label, state in [
     ("url and email fields", {"url": "github.com", "email": "user@acme.com"}),
     ("two bare domains", "github.com acme.com"),
@@ -394,8 +397,9 @@ cases = [
     ("explicit lang en", {"body": "मुझसे दो बार"}, Q_GENERIC, {"lang": "en"}, "english"),
     ("explicit lang de", {"body": "hello there"}, Q_GENERIC, {"lang": "de"}, "multilingual"),
     ("td workflow, auto OFF", {"body": "I was charged twice"}, Q_TD, {}, "english"),
-    ("empty state", {}, Q_GENERIC, {}, "english"),
-    ("none state", None, Q_GENERIC, {}, "english"),
+    # letterless, so these follow `default`, which is multilingual since 0.4.0
+    ("empty state", {}, Q_GENERIC, {}, "multilingual"),
+    ("none state", None, Q_GENERIC, {}, "multilingual"),
 ]
 for label, state, qs, kw, want in cases:
     check("route/" + label, r.route(state, qs, **kw)["model"], want)
@@ -447,17 +451,23 @@ check("route/undecided reason mentions letters",
       "not identified" in _r_lat.route("Müşteriden iki kez ücret alındı ve para iadesi istiyor").reason, True)
 check("route/english still english",
       _r_lat.route("Please refund the duplicate charge on invoice 4411 today.").model, "english")
-check("route/short english still english", _r_lat.route("refund me").model, "english")
+# "refund me" names no language, so it follows `default` like any other undecided text rather
+# than being hard-coded English. With an English default it still reaches the English checkpoint.
+check("route/short english follows default",
+      Router(default="english").route("refund me").model, "english")
 
 # Undecided Latin text follows `default`, as a state with no letters already did. Short messages made
 # only of content words carry nothing that names their language, and hard-coding English for them
 # sent every short Portuguese message to the checkpoint that is 0.97 confident at 0.47 accuracy on
-# `pt`, whatever the router was configured with.
+# `pt`, whatever the router was configured with. Since 0.4.0 the stock default is `multilingual`,
+# so both arms below are exercised: the stock one and an explicit English override.
 _r_ml = Router(default="multilingual")
+_r_en = Router(default="english")
 for text in ["Quero cancelar", "Esqueci minha senha", "Fui cobrado duas vezes",
              "Produto veio quebrado, quero trocar", "refund me"]:
     check("route/undecided follows default " + text[:24], _r_ml.route(text).model, "multilingual")
-    check("route/undecided stock default " + text[:24], _r_lat.route(text).model, "english")
+    check("route/undecided stock default " + text[:24], _r_lat.route(text).model, "multilingual")
+    check("route/undecided english override " + text[:24], _r_en.route(text).model, "english")
 check("route/undecided reason names the default",
       "using default (multilingual)" in _r_ml.route("Esqueci minha senha").reason, True)
 # identified English is not undecided, so a non-English default leaves it alone
@@ -523,6 +533,19 @@ for label, state, segment in [
     check("mixed/routes multilingual: " + label, _r_lat.route(state).model, "multilingual")
 check("mixed/reason names the segment",
       "a line or field reads as 'pt'" in _r_lat.route(_TRACE).reason, True)
+# ...but only the segment scan fills it. `_non_english_segment` reads 4,000 characters in all across
+# every leaf, so a long English first field can leave a foreign one unread; the per-value read that
+# then catches it (#384) keeps the leaf in a local and does not report it. `mixed_segment` is None
+# here even though `language` names the field's language -- asserted rather than assumed, because a
+# future change could fill it and no caller can tell the two provenances apart otherwise.
+_BUDGET_NOTE = "Thanks for reaching out. " * 200          # 5,000 chars, first leaf, all English
+_BUDGET_BODY = "WIE SPAET IST ES IN KOELN HEUTE ABEND"
+check("mixed/segment budget exhausted before the foreign field",
+      _non_english_segment({"note": _BUDGET_NOTE, "body": _BUDGET_BODY}), None)
+check("mixed/the per-value read still names the language",
+      analyse({"note": _BUDGET_NOTE, "body": _BUDGET_BODY})["language"], "de")
+check("mixed/and leaves mixed_segment None",
+      analyse({"note": _BUDGET_NOTE, "body": _BUDGET_BODY})["mixed_segment"], None)
 # English stays English: several English lines, a short foreign sign-off, and code pasted into a request
 # (`os.path` reads as Portuguese, `round(el, 2)` as Spanish, `np.mean(na)` as Portuguese)
 for label, state in [
@@ -606,7 +629,8 @@ for text in [
     "The son of the director filed a complaint about the duplicate invoice",
 ]:
     check("is_english/romance control " + text[:32], is_english(text), True)
-    check("route/romance control " + text[:32], _r_lat.route(text).model, "english")
+    check("route/romance control " + text[:32],
+          Router(default="english").route(text).model, "english")
 
 # A word several lists claim (`la`, `e`, `o`) says "not English" without saying *which* language, so
 # it may not name one on its own -- the same rule as the 0-0 tie above, which is why the sample
@@ -1018,6 +1042,114 @@ check("attach/still the same object", ra._agents["english"] is sentinel, True)
 check("attach/accepts aliases", stubbed_router(1).attach("en", _Stub("x")) is not None, True)
 
 
+# --------------------------------------------------------------------- run_ids per predict
+# docs/hooks/tracing.md tells a tracer to correlate a call's events by `run_id`, and claimed one
+# `Router.predict` "hands out three different `run_id`s". Three is the cold path only: `on_load` is
+# dispatched on a `PredictContext` of its own, so a call that finds its checkpoint resident -- every
+# call after the first, and `attach` fires no `on_load` -- hands out two, and a load that also evicts
+# an LRU checkpoint hands out four. The count is a property of the Router's cache rather than of
+# `predict`, so the gate runs the three cache states and then requires the page to state each
+# measured number beside the clause that earns it. Only `laya.agent.Agent` is stubbed, as above.
+import re as _re  # noqa: E402
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+
+
+class _RunIds:
+    """Records `(event, ctx.run_id)` for every Router event one call dispatches."""
+
+    def __init__(self):
+        self.seen = []
+
+    def _see(self, event, ctx):
+        self.seen.append((event, ctx.run_id))
+
+    def on_route(self, ctx):
+        self._see("on_route", ctx)
+
+    def on_load(self, ctx):
+        self._see("on_load", ctx)
+
+    def on_evict(self, ctx):
+        self._see("on_evict", ctx)
+
+    def on_predict_start(self, ctx):
+        self._see("on_predict_start", ctx)
+
+    def on_predict_end(self, ctx):
+        self._see("on_predict_end", ctx)
+
+
+def _one_predict(attach_name=None, max_loaded=2):
+    rec = _RunIds()
+    rr = Router(max_loaded=max_loaded, hooks=[rec])
+    if attach_name is not None:
+        rr.attach(attach_name, _Stub(attach_name))
+        del rec.seen[:]                    # the record starts at the call, and attach adds nothing
+    with patch("laya.agent.Agent", side_effect=lambda repo, **kw: _Stub(repo)):
+        rr.predict("I was charged twice", Q_GENERIC, model="english")
+    return rec.seen
+
+
+def _events(seen):
+    return [event for event, _ in seen]
+
+
+def _distinct(seen):
+    return len({run_id for _, run_id in seen})
+
+
+_warm = _one_predict(attach_name="english")
+_cold = _one_predict()
+_evicting = _one_predict(attach_name="multilingual", max_loaded=1)
+
+check("run_ids/attach dispatches no lifecycle event", _events(_warm),
+      ["on_route", "on_predict_start", "on_predict_end"])
+check("run_ids/a warm predict hands out two run_ids", _distinct(_warm), 2)
+check("run_ids/a cold predict adds on_load", _events(_cold)[:3],
+      ["on_route", "on_load", "on_predict_start"])
+check("run_ids/a cold predict hands out three run_ids", _distinct(_cold), 3)
+check("run_ids/an evicting cold predict adds on_evict too", _events(_evicting)[:3],
+      ["on_route", "on_evict", "on_load"])
+check("run_ids/an evicting cold predict hands out four run_ids", _distinct(_evicting), 4)
+check("run_ids/start and end share the call's run_id",
+      len({rid for e, rid in _cold if e.startswith("on_predict")}), 1)
+check("run_ids/on_route is not the prediction's run_id",
+      {rid for e, rid in _cold if e == "on_route"} == {rid for e, rid in _cold
+                                                      if e.startswith("on_predict")}, False)
+
+with open(os.path.join(_ROOT, "docs", "hooks", "tracing.md"), encoding="utf-8") as _trace_file:
+    _trace_page = _trace_file.read()
+check("run_ids/tracing.md keeps the run_id bullet the gate reads",
+      "**Not** shared with `on_route`" in _trace_page, True)
+_bullet = _re.sub(r"\s+", " ", _trace_page.split("**Not** shared with `on_route`", 1)[1]
+                  .split("\n- ", 1)[0])
+check("run_ids/the page states no single count for one predict",
+      _re.search(r"hands out \w+ different", _bullet) is None, True)
+# Each "N when ..." clause is read up to the next one, so a needle has to sit in exactly one of
+# them -- which is what makes the pairing a transcription check rather than a word search.
+_clauses = {}
+for _part in _re.split(r"(?=\b(?:one|two|three|four|five)\b when\b)", _bullet, flags=_re.I):
+    _m = _re.match(r"\b(one|two|three|four|five)\b when\b(.*)", _part, _re.I)
+    if _m:
+        _clauses[_m.group(2)] = _WORDS[_m.group(1).lower()]
+
+
+def _stated(needle):
+    """The count the page pairs with the clause holding `needle`, or None unless exactly one does."""
+    hits = {n for cond, n in _clauses.items() if needle in cond}
+    return hits.pop() if len(hits) == 1 else None
+
+
+check("run_ids/the page's resident clause states the measured warm count",
+      _stated("resident"), _distinct(_warm))
+check("run_ids/the page's on_load clause states the measured cold count",
+      _stated("on_load"), _distinct(_cold))
+check("run_ids/the page's on_evict clause states the measured evicting count",
+      _stated("on_evict"), _distinct(_evicting))
+
+
 # --------------------------------------------------------------------- thread safety (issue #95)
 
 def _concurrent_load_dedup():
@@ -1094,6 +1226,427 @@ check("threads/hot-path loads keep agents consistent", agents_len, 1)
 check("threads/hot-path order intact", order, ["english"])
 
 
+def _cold_build_does_not_hold_lifecycle_lock():
+    """A cold build must not stall `loaded` or a resident checkpoint for its whole duration.
+
+    The build runs a download plus construction, seconds to minutes. Held under `_lock`, it made
+    `GET /health` (which reads `loaded`) and every request for an already-resident checkpoint wait
+    for it, so a liveness probe timed out during a lazy load.
+    """
+    import laya.agent as _agent_mod
+    building, release = threading.Event(), threading.Event()
+    constructions = []
+
+    class _BlockingAgent:
+        def __init__(self, *args, **kwargs):
+            constructions.append(1)
+            building.set()
+            release.wait(5)
+
+    old = _agent_mod.Agent
+    _agent_mod.Agent = _BlockingAgent
+    try:
+        r = Router(max_loaded=3)
+        resident = _Stub("english")
+        r.attach("english", resident)
+        loaders = [threading.Thread(target=r.load, args=("multilingual",)) for _ in range(2)]
+        for t in loaders:
+            t.start()
+        building.wait(5)
+        timings = {}
+        for label, call in (("loaded", lambda: r.loaded),
+                            ("resident load", lambda: r.load("english"))):
+            done = threading.Event()
+            threading.Thread(target=lambda c=call, d=done: (c(), d.set()), daemon=True).start()
+            timings[label] = done.wait(1.0)
+        release.set()
+        for t in loaders:
+            t.join(5)
+        loaded_after, built = sorted(r.loaded), len(constructions)
+        # An unload issued while a build is in flight waits for it, so the build cannot land after it.
+        building.clear()
+        release.clear()
+        threading.Thread(target=r.load, args=("typed-decisions",), daemon=True).start()
+        building.wait(5)
+        unloader = threading.Thread(target=r.unload, args=("typed-decisions",))
+        unloader.start()
+        _time.sleep(0.1)
+        release.set()
+        unloader.join(5)
+        timings["unload waits for the build"] = "typed-decisions" not in r.loaded
+        return timings, built, loaded_after
+    finally:
+        release.set()
+        _agent_mod.Agent = old
+
+timings, built, resident_after = _cold_build_does_not_hold_lifecycle_lock()
+check("threads/loaded answers during a cold build", timings["loaded"], True)
+check("threads/resident checkpoint answers during a cold build", timings["resident load"], True)
+check("threads/concurrent cold loads still build once", built, 1)
+check("threads/cold build lands in the LRU", resident_after, ["english", "multilingual"])
+check("threads/unload during a cold build frees it", timings["unload waits for the build"], True)
+
+
+def _on_load_reenters_router(target, hooks_concurrent):
+    """An `on_load` hook may call `router.load()` again without deadlocking.
+
+    `_build_lock` is not re-entrant, so this holds only while `load()` dispatches `on_load`
+    after releasing it. Returns whether the outer load finished, the agent the hook got back,
+    the outer agent, and what ended up loaded.
+    """
+    import laya.agent as _agent_mod
+
+    class _FastAgent:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    got = []
+
+    class _ReentrantHook:
+        def on_load(self, ctx):
+            if ctx.model == "multilingual" and not got:
+                got.append(ctx.router.load(target))
+
+    old = _agent_mod.Agent
+    _agent_mod.Agent = _FastAgent
+    try:
+        r = Router(max_loaded=3, hooks=[_ReentrantHook()], hooks_concurrent=hooks_concurrent)
+        outer = []
+        t = threading.Thread(target=lambda: outer.append(r.load("multilingual")), daemon=True)
+        t.start()
+        t.join(5)
+        return not t.is_alive(), got[0] if got else None, outer[0] if outer else None, sorted(r.loaded)
+    finally:
+        _agent_mod.Agent = old
+
+for concurrent in (True, False):
+    tag = "concurrent" if concurrent else "serialised"
+    finished, inner, outer, loaded = _on_load_reenters_router("multilingual", concurrent)
+    check(f"threads/on_load reloading the same checkpoint does not deadlock ({tag})", finished, True)
+    check(f"threads/on_load reload returns the resident agent ({tag})",
+          inner is not None and inner is outer, True)
+    finished, inner, outer, loaded = _on_load_reenters_router("typed-decisions", concurrent)
+    check(f"threads/on_load loading another checkpoint does not deadlock ({tag})", finished, True)
+    check(f"threads/on_load can load another checkpoint ({tag})", loaded, ["multilingual", "typed-decisions"])
+
+
+def _test_per_checkpoint_unload_granularity():
+    """unload("english") must not wait for an in-flight build of multilingual.
+
+    unload("multilingual") must wait for its own in-flight build, and resident access
+    (r.loaded and r.load("english")) must remain non-blocking while multilingual builds.
+    """
+    import laya.agent as _agent_mod
+    multi_building = threading.Event()
+    multi_release = threading.Event()
+
+    class _ControllableAgent:
+        def __init__(self, repo, *args, **kwargs):
+            if "multilingual" in repo or kwargs.get("subfolder") == "multilingual":
+                multi_building.set()
+                multi_release.wait(10)
+
+        def system_one(self, state, questions):
+            return {"model": "fake", "answers": {}, "usage": {}}
+
+    old = _agent_mod.Agent
+    _agent_mod.Agent = _ControllableAgent
+    try:
+        r = Router(max_loaded=3)
+        resident = _Stub("english")
+        r.attach("english", resident)
+
+        multi_loader = threading.Thread(target=r.load, args=("multilingual",), daemon=True)
+        multi_loader.start()
+        multi_building.wait(5)
+
+        # 1. unload("english") must complete immediately without waiting for multilingual build
+        english_unload_done = threading.Event()
+        threading.Thread(target=lambda: (r.unload("english"), english_unload_done.set()), daemon=True).start()
+        unloaded_english_fast = english_unload_done.wait(1.0)
+        english_resident = "english" in r.loaded
+
+        # 7. loaded and resident access remain non-blocking
+        r.attach("english", resident)
+        loaded_done = threading.Event()
+        threading.Thread(target=lambda: (r.loaded, loaded_done.set()), daemon=True).start()
+        loaded_fast = loaded_done.wait(1.0)
+
+        resident_load_done = threading.Event()
+        threading.Thread(target=lambda: (r.load("english"), resident_load_done.set()), daemon=True).start()
+        resident_load_fast = resident_load_done.wait(1.0)
+
+        # 2. unload("multilingual") waits for multilingual build
+        multi_unload_done = threading.Event()
+        multi_unloader = threading.Thread(
+            target=lambda: (r.unload("multilingual"), multi_unload_done.set()), daemon=True
+        )
+        multi_unloader.start()
+        unloaded_multi_early = multi_unload_done.wait(0.1)
+
+        multi_release.set()
+        multi_loader.join(5)
+        multi_unloader.join(5)
+
+        unloaded_multi_finished = multi_unload_done.wait(1.0)
+        multi_resident_after = "multilingual" in r.loaded
+
+        return (
+            unloaded_english_fast,
+            english_resident,
+            loaded_fast,
+            resident_load_fast,
+            unloaded_multi_early,
+            unloaded_multi_finished,
+            multi_resident_after,
+        )
+    finally:
+        multi_release.set()
+        _agent_mod.Agent = old
+
+(
+    unloaded_en_fast,
+    en_resident,
+    loaded_fast,
+    resident_load_fast,
+    unloaded_multi_early,
+    unloaded_multi_finished,
+    multi_resident_after,
+) = _test_per_checkpoint_unload_granularity()
+check("threads/unload english does not wait for multilingual build", unloaded_en_fast, True)
+check("threads/english is evicted after unload", en_resident, False)
+check("threads/loaded property is non-blocking during build", loaded_fast, True)
+check("threads/resident load is non-blocking during build", resident_load_fast, True)
+check("threads/unload multilingual waits for in-flight build", unloaded_multi_early, False)
+check("threads/unload multilingual completes after build", unloaded_multi_finished, True)
+check("threads/multilingual not resident after unload", multi_resident_after, False)
+
+
+def _test_concurrent_load_same_checkpoint_dedup():
+    """Concurrent loads for the same checkpoint must construct exactly one Agent."""
+    import laya.agent as _agent_mod
+    build_started = threading.Event()
+    build_release = threading.Event()
+    constructions = []
+
+    class _SlowAgent:
+        def __init__(self, *args, **kwargs):
+            constructions.append(1)
+            build_started.set()
+            build_release.wait(5)
+
+    old = _agent_mod.Agent
+    _agent_mod.Agent = _SlowAgent
+    try:
+        r = Router(max_loaded=3)
+        got = []
+        threads = [
+            threading.Thread(target=lambda: got.append(r.load("multilingual")), daemon=True)
+            for _ in range(5)
+        ]
+        for t in threads:
+            t.start()
+
+        build_started.wait(5)
+        build_release.set()
+        for t in threads:
+            t.join(5)
+
+        return len(constructions), len({id(a) for a in got}), len(got)
+    finally:
+        build_release.set()
+        _agent_mod.Agent = old
+
+built_count, unique_agents, total_callers = _test_concurrent_load_same_checkpoint_dedup()
+check("threads/concurrent loads construct exactly one Agent", built_count, 1)
+check("threads/concurrent callers receive identical Agent instance", unique_agents, 1)
+check("threads/all concurrent callers complete", total_callers, 5)
+
+
+def _test_attach_during_build_wins():
+    """attach() called while a build is in flight must win without being overwritten."""
+    import laya.agent as _agent_mod
+    build_started = threading.Event()
+    build_release = threading.Event()
+
+    class _ControllableAgent:
+        def __init__(self, *args, **kwargs):
+            build_started.set()
+            build_release.wait(5)
+
+    old = _agent_mod.Agent
+    _agent_mod.Agent = _ControllableAgent
+    try:
+        r = Router(max_loaded=3)
+        attached_agent = _Stub("english")
+        loader_result = []
+
+        loader = threading.Thread(target=lambda: loader_result.append(r.load("english")), daemon=True)
+        loader.start()
+
+        build_started.wait(5)
+        r.attach("english", attached_agent)
+
+        build_release.set()
+        loader.join(5)
+
+        subsequent = r.load("english")
+        return (
+            loader_result[0] is attached_agent,
+            subsequent is attached_agent,
+            r._agents.get("english") is attached_agent,
+        )
+    finally:
+        build_release.set()
+        _agent_mod.Agent = old
+
+loader_won, subsequent_won, resident_won = _test_attach_during_build_wins()
+check("threads/attach during build wins for in-flight loader", loader_won, True)
+check("threads/attach during build wins for subsequent load", subsequent_won, True)
+check("threads/attach during build remains resident", resident_won, True)
+
+
+def _test_failed_build_cleans_inflight_and_allows_retry():
+    """Failed builds clean up in-flight state, propagate exceptions, and allow retry."""
+    import laya.agent as _agent_mod
+    fail_first = [True]
+
+    class _FailingAgent:
+        def __init__(self, *args, **kwargs):
+            if fail_first[0]:
+                raise ValueError("corrupted weights download")
+            self.model = "ok"
+
+    old = _agent_mod.Agent
+    _agent_mod.Agent = _FailingAgent
+    try:
+        r = Router(max_loaded=3)
+        errors = []
+
+        def _loader(err_list):
+            try:
+                r.load("english")
+            except ValueError as e:
+                err_list.append(str(e))
+
+        t1 = threading.Thread(target=_loader, args=(errors,), daemon=True)
+        t2 = threading.Thread(target=_loader, args=(errors,), daemon=True)
+        t1.start()
+        t2.start()
+        t1.join(5)
+        t2.join(5)
+
+        inflight_cleared = "english" not in r._loading
+        not_resident = "english" not in r._agents
+
+        fail_first[0] = False
+        retried_agent = r.load("english")
+        retried_resident = "english" in r.loaded
+
+        return (
+            len(errors),
+            errors[0] if errors else None,
+            inflight_cleared,
+            not_resident,
+            retried_agent.model,
+            retried_resident,
+        )
+    finally:
+        _agent_mod.Agent = old
+
+err_count, first_err, inflight_cleared, not_res, retried_model, retried_res = (
+    _test_failed_build_cleans_inflight_and_allows_retry()
+)
+check("threads/failed build raises to concurrent loaders", err_count, 2)
+check("threads/failed build error message preserved", first_err, "corrupted weights download")
+check("threads/failed build cleans _loading registry", inflight_cleared, True)
+check("threads/failed build does not leave model resident", not_res, True)
+check("threads/subsequent load retries and succeeds", retried_model, "ok")
+check("threads/retried load lands in resident set", retried_res, True)
+
+
+def _test_waiting_callers_no_deadlock():
+    """Concurrent mix of loads and unloads on same and different models must not deadlock."""
+    import laya.agent as _agent_mod
+
+    class _FastAgent:
+        def __init__(self, *args, **kwargs):
+            _time.sleep(0.005)
+
+    old = _agent_mod.Agent
+    _agent_mod.Agent = _FastAgent
+    try:
+        r = Router(max_loaded=3)
+        models = ["english", "multilingual", "typed-decisions"]
+        threads = []
+        for _ in range(6):
+            for m in models:
+                threads.append(threading.Thread(target=r.load, args=(m,)))
+                threads.append(threading.Thread(target=r.unload, args=(m,)))
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(5)
+        all_finished = not any(t.is_alive() for t in threads)
+        loading_clean = len(r._loading) == 0
+        return all_finished, loading_clean
+    finally:
+        _agent_mod.Agent = old
+
+no_hang, loading_empty = _test_waiting_callers_no_deadlock()
+check("threads/concurrent load and unload callers do not deadlock", no_hang, True)
+check("threads/all in-flight markers cleared after completion", loading_empty, True)
+
+
+def _test_unload_reload_sequence_no_resurrection():
+    """An older in-flight build cannot resurrect the model after an unload/reload sequence."""
+    import laya.agent as _agent_mod
+    first_build_started = threading.Event()
+    first_build_release = threading.Event()
+    agent_instances = []
+
+    class _SequencedAgent:
+        def __init__(self, *args, **kwargs):
+            agent_instances.append(self)
+            if len(agent_instances) == 1:
+                first_build_started.set()
+                first_build_release.wait(5)
+
+    old = _agent_mod.Agent
+    _agent_mod.Agent = _SequencedAgent
+    try:
+        r = Router(max_loaded=3)
+        t_load = threading.Thread(target=r.load, args=("english",), daemon=True)
+        t_load.start()
+        first_build_started.wait(5)
+
+        unload_done = threading.Event()
+        t_unload = threading.Thread(target=lambda: (r.unload("english"), unload_done.set()), daemon=True)
+        t_unload.start()
+
+        first_build_release.set()
+        t_load.join(5)
+        t_unload.join(5)
+
+        unloaded_ok = unload_done.is_set()
+        not_resident_after_unload = "english" not in r.loaded
+
+        c_agent = r.load("english")
+        is_new_agent = c_agent is agent_instances[1] and c_agent is not agent_instances[0]
+        resident_final = "english" in r.loaded
+
+        return unloaded_ok, not_resident_after_unload, is_new_agent, resident_final
+    finally:
+        first_build_release.set()
+        _agent_mod.Agent = old
+
+unloaded_ok, not_res_after, is_new_agent, res_final = _test_unload_reload_sequence_no_resurrection()
+check("threads/unload in-flight build finishes successfully", unloaded_ok, True)
+check("threads/model not resident after unload completes", not_res_after, True)
+check("threads/reload builds new instance without resurrection", is_new_agent, True)
+check("threads/reload lands in resident set", res_final, True)
+
+
 
 # --------------------------------------------------------------------- unlisted scripts
 # `detect_script` counts an alphabetic character only when one of `_SCRIPT_RANGES` claims
@@ -1126,12 +1679,15 @@ for label, text in (
 # Fullwidth Latin is Latin, not an unlisted script.
 check("unlisted/fullwidth latin is latin", detect_script("ＨＥＬＬＯ"), "latin")
 
-# A state with no letters at all must keep behaving exactly as before.
+# A state with no letters at all takes `default`, whatever that is, which is the behaviour that
+# must not change. Both arms are checked so this cannot pass by agreeing with one constant.
 for label, text in (("empty", ""), ("digits only", "12345 67890"), ("emoji only", "😀😀😀")):
     check("unlisted/letterless " + label + " is still unknown",
           analyse(text)["script"], "unknown")
-    check("unlisted/letterless " + label + " keeps the default",
-          Router().route(text)["model"], "english")
+    check("unlisted/letterless " + label + " keeps the stock default",
+          Router().route(text)["model"], "multilingual")
+    check("unlisted/letterless " + label + " keeps an english default",
+          Router(default="english").route(text)["model"], "english")
 
 # The scripts the table does name must be untouched.
 for label, text, script in (
@@ -1185,6 +1741,539 @@ for code in ("de", "fr", "zh", "ja", "pt-BR", "de_DE.UTF-8"):
 # as a language by accident.
 check("lang-code/agnostic primary wins over its subtag", _english_from_code("C.UTF-8"), None)
 check("lang-code/posix with a modifier abstains", _english_from_code("POSIX-1"), None)
+
+
+# --------------------------------------------------------------------- registered checkpoints
+# A Router serves the checkpoints a caller registers beside the built-in three: named in `model=`
+# or `task=` like them, and loaded, evicted and unloaded like them.
+from laya.router import canonical_name  # noqa: E402
+
+check("registry/canonical lowercases and aliases", canonical_name(" ML "), "multilingual")
+check("registry/canonical leaves an unknown name as typed", canonical_name("Papers"), "papers")
+
+_SECTION_Q = {"section": {"type": "choice", "instructions": "Which section?", "criteria": {"a": "A", "b": "B"}}}
+_CLAIM = "Transparency improved operator performance in 11 of 17 studies."
+r = Router(models={"papers": "/tmp/laya-papers", "tone": ("acme/laya-tone", None)})
+check("registry/registered names resolve", r.resolve("papers"), "papers")
+check("registry/registered names resolve case-insensitively", r.resolve(" PAPERS "), "papers")
+check("registry/built-ins still resolve", r.resolve("ml"), "multilingual")
+check("registry/models holds built-ins plus registered", sorted(r.models),
+      ["english", "multilingual", "papers", "tone", "typed-decisions"])
+try:
+    r.resolve("nope")
+    check("registry/unknown name raises", False, True)
+except ValueError as e:
+    check("registry/unknown name lists the registered ones too", "'papers'" in str(e), True)
+check("registry/normalise_name still knows only the built-ins", resolve_model_spec("papers"), None)
+
+d = r.route(_CLAIM, _SECTION_Q, model="papers")
+check("route/model= names a registered checkpoint", d.model, "papers")
+check("route/repo is the registered source", d["repo"], "/tmp/laya-papers")
+check("route/model= accepts a registered (repo, subfolder) pair", r.route(_CLAIM, _SECTION_Q, model="tone")["repo"],
+      "acme/laya-tone")
+check("route/task= names a registered checkpoint", r.route(_CLAIM, _SECTION_Q, task="tone").model, "tone")
+check("route/a registered checkpoint is never chosen automatically", r.route(_CLAIM, _SECTION_Q).model, "english")
+check("route/route_batch keeps the mix in order",
+      [x.model for x in r.route_batch([{"state": _CLAIM, "questions": _SECTION_Q, "model": "papers"},
+                                       {"state": _CLAIM, "questions": _SECTION_Q},
+                                       {"state": _CLAIM, "questions": _SECTION_Q, "model": "tone"}])],
+      ["papers", "english", "tone"])
+check("registered/reports source and description", Router(models={"papers": "/tmp/laya-papers"}).registered,
+      {"papers": {"source": "/tmp/laya-papers", "description": None}})
+check("registered/built-ins are not listed", Router().registered, {})
+
+# The built-in typed-decisions workflows are unchanged: opt-in, and still routed to the built-in.
+_CS = {q: _SECTION_Q["section"] for q in ("action", "category", "churn_risk", "needs_human", "urgency")}
+check("workflow/still needs auto_task_detection", r.route(_CLAIM, _CS).model, "english")
+check("workflow/with auto_task_detection",
+      Router(auto_task_detection=True).route(_CLAIM, _CS)["workflow"], "customer_service")
+
+# a checkpoint registered after construction is not read as an artifact map of a nested env.
+_old_env = os.environ.get("LAYA_SHA256_DIGESTS")
+os.environ["LAYA_SHA256_DIGESTS"] = '{"english": {"model.safetensors": "%s"}}' % ("c" * 64)
+try:
+    _r_late = Router()
+    _r_late.register("mine", "/tmp/laya-mine")
+    check("register/nested LAYA_SHA256_DIGESTS gives a later checkpoint the empty placeholder",
+          _r_late.sha256_digests["mine"], {})
+finally:
+    if _old_env is None:
+        os.environ.pop("LAYA_SHA256_DIGESTS", None)
+    else:
+        os.environ["LAYA_SHA256_DIGESTS"] = _old_env
+
+# a source starting with ~ is a local path.
+check("register/~ in a source is expanded", Router(models={"mine": "~/laya-mine"}).models["mine"],
+      os.path.expanduser("~/laya-mine"))
+
+# `auto` is the routing word everywhere, so it cannot name a checkpoint.
+try:
+    Router().register("auto", "/tmp/laya-auto")
+    check("register/auto is refused", True, False)
+except ValueError as _e:
+    check("register/auto is refused", "auto" in str(_e), True)
+
+# an attach()ed agent with no source is not part of a whole-router preload.
+with patch("laya.agent.Agent", side_effect=lambda repo, **kw: _Stub(repo)) as _build_att:
+    _r_att = Router()
+    _r_att.attach("mine", _Stub("mine"))
+    _r_att.unload("mine")
+    _r_att.preload()
+    check("preload/skips a name with no source", sorted(_r_att.loaded),
+          ["english", "multilingual", "typed-decisions"])
+
+# register(): the same thing after construction.
+r2 = Router()
+check("register/returns the canonical name", r2.register("Tone", "acme/laya-tone", description="tone"), "tone")
+check("register/description is reported", r2.registered["tone"], {"source": "acme/laya-tone", "description": "tone"})
+check("register/a second call replaces the source", (r2.register("tone", "/tmp/tone-v2"), r2.models["tone"])[1], "/tmp/tone-v2")
+check("register/replacing the source keeps the description", r2.registered["tone"]["description"], "tone")
+check("register/a built-in name re-points that checkpoint",
+      Router(models={"english": "/tmp/my-english"}).models["english"], "/tmp/my-english")
+check("register/an alias re-points its built-in", Router(models={"en": "/tmp/mine"}).models["english"], "/tmp/mine")
+for bad, why in (("Bad/Name", "slash"), ("", "empty"), ("-dash", "leading dash"), ("a b", "space")):
+    try:
+        Router().register(bad, "/tmp/x")
+        check("register/refuses %s" % why, False, True)
+    except ValueError:
+        check("register/refuses %s" % why, True, True)
+try:
+    Router(models={"papers": 42})
+    check("register/a source must be a path, repo or pair", False, True)
+except TypeError:
+    check("register/a source must be a path, repo or pair", True, True)
+
+# Every name-taking option accepts a registered name, the way it accepts a built-in one.
+r3 = Router(models={"papers": "/tmp/laya-papers"}, revisions={"papers": "abc123"}, default="papers",
+            sha256_digests={"papers": {"model.safetensors": "a" * 64}})
+check("register/default may be a registered name", r3.default, "papers")
+check("register/revisions keyed by a registered name", r3.revisions, {"papers": "abc123"})
+check("register/sha256_digests keyed by a registered name", r3.sha256_digests["papers"], {"model.safetensors": "a" * 64})
+check("register/undecided text falls back to the registered default",
+      r3.route("Quero cancelar", {"q": _SECTION_Q["section"]}).model, "papers")
+_old_env = os.environ.get("LAYA_SHA256_DIGESTS")
+os.environ["LAYA_SHA256_DIGESTS"] = '{"papers": {"model.safetensors": "%s"}}' % ("b" * 64)
+try:
+    check("register/LAYA_SHA256_DIGESTS may name a registered checkpoint",
+          Router(models={"papers": "/tmp/laya-papers"}).sha256_digests["papers"], {"model.safetensors": "b" * 64})
+finally:
+    if _old_env is None:
+        os.environ.pop("LAYA_SHA256_DIGESTS", None)
+    else:
+        os.environ["LAYA_SHA256_DIGESTS"] = _old_env
+
+# attach() under a new name registers it with no source: resident now, not reloadable later.
+r4 = Router()
+r4.attach("adhoc", _Stub("adhoc"))
+check("attach/new name becomes resident", "adhoc" in r4.loaded, True)
+check("attach/new name is routable", r4.route(_CLAIM, _SECTION_Q, model="adhoc").model, "adhoc")
+check("attach/new name has no source", r4.models["adhoc"], None)
+r4.unload("adhoc")
+try:
+    r4.load("adhoc")
+    check("attach/reload without a source is refused", False, True)
+except ValueError as e:
+    check("attach/reload without a source is refused", "no source" in str(e), True)
+
+# load() hands a registered local path or repo to Agent as a source, not as a registry name.
+import laya.agent as _agent_for_registry
+_built = []
+
+
+class _RecordingAgent:
+    def __init__(self, repo, **kwargs):
+        _built.append((repo, kwargs.get("subfolder")))
+
+
+_prev_agent = _agent_for_registry.Agent
+_agent_for_registry.Agent = _RecordingAgent
+try:
+    r5 = Router(models={"papers": "/tmp/laya-papers", "tone": ("acme/laya-tone", "v2")}, max_loaded=3)
+    r5.load("papers")
+    r5.load("tone")
+    check("load/a registered path reaches Agent unchanged", _built[0], ("/tmp/laya-papers", None))
+    check("load/a registered (repo, subfolder) pair reaches Agent", _built[1], ("acme/laya-tone", "v2"))
+    check("load/registered checkpoints are resident like built-ins", r5.loaded, ["papers", "tone"])
+    r5.preload(["papers", "english"])
+    check("load/preload accepts registered names", "english" in r5.loaded and "papers" in r5.loaded, True)
+    r5.unload("papers")
+    check("load/unload accepts registered names", "papers" in r5.loaded, False)
+finally:
+    _agent_for_registry.Agent = _prev_agent
+
+
+# A refused register() leaves the router as it was.
+_at = Router(models={"a": "/a", "b": "/b"})
+try:
+    _at.register("Bad/Name", "/x", description="x")
+    _at_raised = False
+except ValueError:
+    _at_raised = True
+check("register/refused call raises", _at_raised, True)
+check("register/refused call leaves no checkpoint", ("bad/name" in _at.models, "bad/name" in _at.descriptions), (False, False))
+_at2 = Router(models={"a": "/a"})
+try:
+    _at2.register("a", 42)
+except TypeError:
+    pass
+check("register/refused call keeps the old source", _at2.registered["a"]["source"], "/a")
+
+# An explicit `sha256_digests[name] = None` is a present entry that opts that checkpoint out of
+# digest checks; a refused register() must restore it, not drop it (dropping it would hand the
+# checkpoint back to the environment's digest map).
+_at3 = Router(models={"a": "/a"}, sha256_digests={"a": None})
+try:
+    _at3.register("a", 42)
+    check("register/refused call raises on a bad source", False, True)
+except TypeError:
+    check("register/refused call raises on a bad source", True, True)
+check("register/refused call keeps an opted-out digest entry", ("a" in _at3.sha256_digests, _at3.sha256_digests.get("a", "gone")),
+      (True, None))
+check("register/refused call keeps the old source after a digest opt-out", _at3.models["a"], "/a")
+
+# unregister() removes a registered name everywhere.
+_rp = Router(models={"a": "/a", "b": "/b"})
+_rp.descriptions["a"] = "A"
+_rp.sha256_digests["a"] = None
+_rp.revisions["a"] = "main"
+_rp.attach("a", object())
+_rp.unregister("a")
+check("unregister/removes the name everywhere",
+      ("a" in _rp.models, "a" in _rp.descriptions, "a" in _rp.sha256_digests,
+       "a" in _rp.revisions, "a" in _rp.loaded, "a" in _rp.registered), (False,) * 6)
+check("unregister/others are untouched", sorted(_rp.registered), ["b"])
+for _bad in ("english", "ml", "never-registered"):
+    try:
+        _rp.unregister(_bad)
+        check("unregister/%s refused" % _bad, False, True)
+    except ValueError:
+        check("unregister/%s refused" % _bad, True, True)
+_rp.register("a", "/a")
+check("unregister/the name can be registered again", "a" in _rp.registered, True)
+
+# Routing while another thread re-registers and unregisters never fails or answers from a torn state.
+_rc = Router(models={"a": "/a"})
+_bad = []
+
+
+def _churn():
+    for _ in range(40):
+        _rc.register("a", "/a")
+        _rc.register("c", "/c")
+        _rc.unregister("c")
+
+
+def _route():
+    for _ in range(200):
+        try:
+            _got = _rc.route(_CLAIM, model="a").model
+            if _got != "a":
+                _bad.append(_got)
+            _rc.registered
+            try:
+                _rc.route(_CLAIM, model="c")
+            except ValueError:      # unregistered at that instant
+                pass
+        except Exception as exc:  # noqa: BLE001
+            _bad.append(exc)
+
+
+_th = [threading.Thread(target=_churn)] + [threading.Thread(target=_route) for _ in range(3)]
+for _t in _th:
+    _t.start()
+for _t in _th[1:]:
+    _t.join()
+_th[0].join()
+check("register+unregister while routing stay consistent", _bad[:3], [])
+
+
+def _swallow(fn, *args):
+    try:
+        fn(*args)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _test_unregister_during_build_leaves_no_zombie():
+    """unregister waits for a build already in flight and leaves nothing under the dropped name."""
+    import laya.agent as _agent_mod
+    started, release = threading.Event(), threading.Event()
+
+    class _Slow:
+        def __init__(self, *args, **kwargs):
+            started.set()
+            release.wait(5)
+
+    old = _agent_mod.Agent
+    _agent_mod.Agent = _Slow
+    try:
+        r = Router(models={"tone": "/tone"})
+        outcome = []
+
+        def _load():
+            try:
+                outcome.append(r.load("tone"))
+            except ValueError as e:
+                outcome.append(e)
+
+        loader = threading.Thread(target=_load, daemon=True)
+        loader.start()
+        started.wait(2)
+        _timer = threading.Timer(0.3, release.set)
+        _timer.start()
+        t0 = _time.perf_counter()
+        r.unregister("tone")
+        waited = _time.perf_counter() - t0
+        loader.join(2)
+        _timer.cancel()
+        return (waited >= 0.2, loader.is_alive(), len(outcome) == 1,
+                "tone" in r.loaded, "tone" in r.models, "tone" in r._agents, "tone" in r._order,
+                "tone" in r._loading)
+    finally:
+        release.set()
+        _agent_mod.Agent = old
+
+
+check("unregister/a build in flight is waited for and leaves nothing behind",
+      _test_unregister_during_build_leaves_no_zombie(),
+      (True, False, True, False, False, False, False, False))
+
+# The default checkpoint cannot be unregistered, and the router keeps routing.
+_rd = Router(models={"papers": "/x"}, default="papers")
+try:
+    _rd.unregister("papers")
+    check("unregister/the default is refused", False, True)
+except ValueError as _e:
+    check("unregister/the default is refused", "default" in str(_e), True)
+check("unregister/a refused default still routes", _rd.route("12345").model, "papers")
+
+
+# Re-registering a name with a new source unloads the resident Agent; the same source does not.
+class _EvictLog:
+    def __init__(self):
+        self.evicts = []
+
+    def on_evict(self, ctx):
+        self.evicts.append(ctx.model)
+
+
+_log = _EvictLog()
+_rr = Router(hooks=[_log])
+_rr.attach("papers", _Stub("papers"))
+_rr.register("papers", "/y")
+check("register/a new source unloads the resident agent", "papers" in _rr.loaded, False)
+check("register/a new source fires on_evict", _log.evicts, ["papers"])
+_rr.attach("papers", _Stub("papers"))
+_rr.register("papers", "/y")
+check("register/the same source keeps the resident agent", "papers" in _rr.loaded, True)
+check("register/the same source fires no on_evict", _log.evicts, ["papers"])
+_rr.register("fresh", "/z")
+check("register/a new name unloads nothing", _log.evicts, ["papers"])
+
+
+# --------------------------------------------------------------------- near-typo names
+# A custom name one edit from a built-in is still registered. The call warns and names both,
+# so the typo is visible without taking the name away. An exact built-in, an alias, and a
+# clearly different name do not warn; neither does a registration refused for another reason.
+import inspect as _inspect
+import warnings as _warnings
+
+
+def _near_notes(caught):
+    return [w for w in caught if str(w.message).startswith("laya: checkpoint name")]
+
+
+def _near_text(name, built_in):
+    return ("laya: checkpoint name %r is one edit from the built-in %r; it is registered "
+            "as a separate checkpoint and %r is unchanged." % (name, built_in, built_in))
+
+
+def _warning_site(note):
+    """(basename, lineno) the warning was attributed to, without reading source."""
+    if note is None:
+        return None
+    return os.path.basename(note.filename), note.lineno
+
+
+with _warnings.catch_warnings(record=True) as _near_ctor_ws:
+    _warnings.simplefilter("always")
+    _near_ctor_line = _inspect.currentframe().f_lineno + 1  # the Router() call on the next line
+    _near_ctor = Router(models={"englsh": "/tmp/x"})
+_near_ctor_notes = _near_notes(_near_ctor_ws)
+_near_ctor_note = _near_ctor_notes[0] if _near_ctor_notes else None
+check("near-typo/constructor warns once", len(_near_ctor_notes), 1)
+check("near-typo/constructor names both",
+      None if _near_ctor_note is None else str(_near_ctor_note.message), _near_text("englsh", "english"))
+check("near-typo/constructor category",
+      None if _near_ctor_note is None else _near_ctor_note.category, RuntimeWarning)
+check("near-typo/constructor points at the caller", _warning_site(_near_ctor_note),
+      ("test_router.py", _near_ctor_line))
+check("near-typo/constructor still registers", _near_ctor.models.get("englsh"), "/tmp/x")
+check("near-typo/constructor leaves the built-in", _near_ctor.models["english"], DEFAULT_MODELS["english"])
+
+_near_reg_router = Router()
+with _warnings.catch_warnings(record=True) as _near_reg_ws:
+    _warnings.simplefilter("always")
+    _near_reg_line = _inspect.currentframe().f_lineno + 1  # the register() call on the next line
+    _near_reg = _near_reg_router.register("typed-decision", "/tmp/x")
+_near_reg_notes = _near_notes(_near_reg_ws)
+_near_reg_note = _near_reg_notes[0] if _near_reg_notes else None
+check("near-typo/register warns once", len(_near_reg_notes), 1)
+check("near-typo/register names both",
+      None if _near_reg_note is None else str(_near_reg_note.message),
+      _near_text("typed-decision", "typed-decisions"))
+check("near-typo/register points at the caller", _warning_site(_near_reg_note),
+      ("test_router.py", _near_reg_line))
+check("near-typo/register returns the name", _near_reg, "typed-decision")
+check("near-typo/register still registers", _near_reg_router.models.get("typed-decision"), "/tmp/x")
+check("near-typo/register leaves the built-in",
+      _near_reg_router.models["typed-decisions"], DEFAULT_MODELS["typed-decisions"])
+
+# An adjacent-letter swap is one edit (`enlgish`), not two substitutions.
+_near_swap_router = Router()
+with _warnings.catch_warnings(record=True) as _near_swap_ws:
+    _warnings.simplefilter("always")
+    _near_swap_router.register("enlgish", "/tmp/x")
+_near_swap_notes = _near_notes(_near_swap_ws)
+check("near-typo/adjacent swap warns once", len(_near_swap_notes), 1)
+check("near-typo/adjacent swap names both",
+      "" if not _near_swap_notes else str(_near_swap_notes[0].message), _near_text("enlgish", "english"))
+check("near-typo/adjacent swap still registers", _near_swap_router.models.get("enlgish"), "/tmp/x")
+
+with _warnings.catch_warnings(record=True) as _quiet_ws:
+    _warnings.simplefilter("always")
+    _quiet = Router(models={"papers": "/tmp/papers", "tone": "/tmp/tone", "english": "/tmp/my-english"})
+    _quiet.register("en", "/tmp/alias")
+    _quiet.register("ml", "/tmp/ml-alias")
+check("near-typo/distinct names and built-ins do not warn", _near_notes(_quiet_ws), [])
+check("near-typo/a built-in re-point still lands", _quiet.models["english"], "/tmp/alias")
+check("near-typo/an alias re-point still lands", _quiet.models["multilingual"], "/tmp/ml-alias")
+
+with _warnings.catch_warnings(record=True) as _bad_ws:
+    _warnings.simplefilter("always")
+    try:
+        Router().register("Bad/Name", "/tmp/x")
+        _bad_raised = None
+    except ValueError as _exc:
+        _bad_raised = _exc
+check("near-typo/invalid name raises", isinstance(_bad_raised, ValueError), True)
+check("near-typo/invalid name does not warn", _near_notes(_bad_ws), [])
+
+with _warnings.catch_warnings(record=True) as _src_ws:
+    _warnings.simplefilter("always")
+    try:
+        Router().register("englsh", 42)
+        _src_raised = None
+    except TypeError as _exc:
+        _src_raised = _exc
+check("near-typo/invalid source raises", isinstance(_src_raised, TypeError), True)
+check("near-typo/invalid source does not warn", _near_notes(_src_ws), [])
+
+# Promoting the warning to an error must not leave the name behind. The warning is raised
+# inside `register`'s try, so the existing rollback restores the router.
+_roll = Router(models={"papers": "/tmp/papers"})
+_roll_before = (dict(_roll.models), dict(_roll.descriptions), dict(_roll.sha256_digests))
+with _warnings.catch_warnings():
+    _warnings.simplefilter("error")
+    try:
+        _roll.register("englsh", "/tmp/x", description="typo")
+        _roll_raised = None
+    except RuntimeWarning as _exc:
+        _roll_raised = _exc
+check("near-typo/warnings-as-errors raises", isinstance(_roll_raised, RuntimeWarning), True)
+check("near-typo/warnings-as-errors names both",
+      _roll_raised is not None and "englsh" in str(_roll_raised) and "english" in str(_roll_raised), True)
+check("near-typo/warnings-as-errors leaves the router unchanged",
+      (dict(_roll.models), dict(_roll.descriptions), dict(_roll.sha256_digests)), _roll_before)
+
+
+# --------------------------------------------------------------------- sort report (#1111)
+# The reorder switches per checkpoint/question group inside predict_batch, on each group's own
+# state count -- a denominator no caller outside can see, which is why the shell's old note read
+# the file and went quiet exactly when auto-routing split a batch into smaller groups. The
+# `diagnostics` out-dict hands the per-group outcome back once the batch has run. Explicit
+# `model` overrides split the batch without loading anything and `load` is stubbed, so this
+# runs with no checkpoints.
+class _SortAgent:
+    def __init__(self, name):
+        self.name = name
+        self.calls = []
+
+    def predict_batch(self, states, questions, batch_size=None, sort_by_length=False):
+        chunk = batch_size if (batch_size and batch_size > 0) else len(states)
+        self.calls.append((len(states), batch_size, sort_by_length,
+                           bool(sort_by_length and 1 < chunk < len(states))))
+        return [{"model": self.name, "answers": {}, "usage": {}} for _ in states]
+
+
+_sr = Router()
+_sr_agents = {}
+
+
+def _sr_load(name, _rr=_sr):
+    key = _rr.resolve(name)
+    if key not in _sr_agents:
+        _sr_agents[key] = _SortAgent(key)
+    return _sr_agents[key]
+
+
+_sr.load = _sr_load
+# Six requests like the issue's file: four that route to one checkpoint, two to another.
+_sr_requests = [{"state": {"body": "line %d" % i}, "questions": Q_GENERIC,
+                 "model": "english" if i < 4 else "multilingual"} for i in range(6)]
+
+_report = {}
+_sr.predict_batch(_sr_requests, batch_size=5, sort_by_length=True, diagnostics=_report)
+check("sort report/two groups, a batch wider than both reorders neither", _report,
+      {"sort_by_length": {"groups": 2, "reordered": 0, "smallest": 2, "largest": 4}})
+check("sort report/each group still got the knob and kept its own size",
+      [_sr_agents["english"].calls, _sr_agents["multilingual"].calls],
+      [[(4, 5, True, False)], [(2, 5, True, False)]])
+
+for _a in _sr_agents.values():
+    _a.calls = []
+_report = {}
+_sr.predict_batch(_sr_requests, batch_size=3, sort_by_length=True, diagnostics=_report)
+check("sort report/a batch between the group sizes reorders exactly one", _report,
+      {"sort_by_length": {"groups": 2, "reordered": 1, "smallest": 2, "largest": 4}})
+check("sort report/only the group that cleared the gate reordered",
+      [_sr_agents["english"].calls, _sr_agents["multilingual"].calls],
+      [[(4, 3, True, True)], [(2, 3, True, False)]])
+
+_report = {}
+_sr.predict_batch(_sr_requests, batch_size=2, diagnostics=_report)
+check("sort report/untouched when the knob is off", _report, {})
+
+check("sort report/results keep input order regardless",
+      [r["routing"]["model"] for r in _sr.predict_batch(_sr_requests, batch_size=3,
+                                                        sort_by_length=True)],
+      ["english"] * 4 + ["multilingual"] * 2)
+
+
+# --------------------------------------------------------------------- predict input validation (#707)
+_r_val = Router()
+for label, state, qs, exc_type, err_match in [
+    ("state is None", None, Q_GENERIC, TypeError, "state must not be None"),
+    ("questions not dict", "text", ["q"], TypeError, "questions must be a dict"),
+]:
+    try:
+        _r_val.predict(state, qs)
+        FAIL.append("predict validation/%s: should have raised %s" % (label, exc_type.__name__))
+    except exc_type as _exc:
+        check("predict validation/%s raises %s" % (label, exc_type.__name__), err_match in str(_exc), True)
+    except Exception as _exc:  # noqa: BLE001
+        FAIL.append("predict validation/%s: raised %s instead of %s: %s" %
+                    (label, type(_exc).__name__, exc_type.__name__, _exc))
+check("predict validation/failed calls loaded nothing", _r_val.loaded, [])
+
+try:
+    _r_val.route("text", ["q"])
+    FAIL.append("route validation/questions not dict: should have raised TypeError")
+except TypeError as _exc:
+    check("route validation/questions not dict raises TypeError", "questions must be a dict" in str(_exc), True)
+except Exception as _exc:  # noqa: BLE001
+    FAIL.append("route validation/questions not dict: raised %s instead of TypeError: %s" %
+                (type(_exc).__name__, _exc))
 
 
 # --------------------------------------------------------------------- report

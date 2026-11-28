@@ -42,7 +42,8 @@ The top level must be an object with `properties`. Each property becomes one que
 
 Every row below is a real schema: `tests/test_structured_docs.py` compiles the first column and
 asserts the question the compiler actually produces, so this table cannot drift from the code. A cell
-is either a property schema on its own, or a call to an entry point.
+is either a property schema on its own, a whole schema when the row needs its `$defs` (the field is
+named `field`), or a call to an entry point.
 
 | JSON schema | Laya question | Returned value |
 |---|---|---|
@@ -55,9 +56,14 @@ is either a property schema on its own, or a call to an entry point.
 | `{"anyOf": [{"enum": ["x", "y"]}, {"type": "null"}]}` | `choice` | as the plain `enum` row; no answer leaves the key out |
 | `{"oneOf": [{"type": "boolean"}, {"type": "null"}]}` | `noul` | as the plain `boolean` row |
 | `{"type": ["integer", "null"], "minimum": 1, "maximum": 3}` | `score` | as the plain bounded-integer row |
+| `{"properties": {"field": {"$ref": "#/$defs/Dept"}}, "$defs": {"Dept": {"enum": ["billing", "support"]}}}` | `choice` | as the plain `enum` row; a local `$ref` is planned as the definition it names |
+| `{"allOf": [{"enum": ["x", "y"]}]}` | `choice` | as the plain `enum` row; the one-item wrapper pydantic v1 puts around a described `$ref` |
 
 `Literal[...]` and `Optional[...]` are the pydantic spellings of the `enum` and `anyOf` rows:
-`questions_from_pydantic` renders them to those shapes and the same rows apply.
+`questions_from_pydantic` renders them to those shapes and the same rows apply. An `Enum` field
+(`str`/`int` mixins and `IntEnum` included) is the `$ref` row, which needs the whole schema to show:
+pydantic puts the members in `$defs` and points the property at them, so `Optional[Dept]` is an
+`anyOf` around that `$ref`.
 
 `title` is **not** read. pydantic puts one on every field of `model_json_schema()` whether you asked
 for it or not, and a per-property name cannot label the per-option choices a question is built from,
@@ -76,9 +82,10 @@ A schema that cannot be answered from a fixed option set raises `laya.structured
 | `{"type": "string"}` | `properties.name: a free string cannot be a fixed option set; use 'enum' or a boolean` |
 | `{"type": "array", "items": {"type": "string"}}` | `properties.name: arrays are not supported; ask one field per element` |
 | `{"type": "object", "properties": {"inner": {"type": "boolean"}}}` | `properties.name: nested objects are not supported; flatten the schema` |
-| `{"$ref": "#/definitions/node"}` | `properties.name: $ref/recursion is not supported; flatten the schema` |
+| `{"$ref": "#/definitions/node"}` | `properties.name: $ref '#/definitions/node' does not resolve to an entry of this schema's '$defs' or 'definitions'` |
 | `{"enum": [1, "1"]}` | `properties.name: enum values produce duplicate choice labels` |
 | `{"enum": []}` | `properties.name: 'enum' must not be empty` |
+| `{"enum": "abc"}` | `properties.name: 'enum' must be an array of values, got str` |
 | `{"type": "number"}` | `properties.name: a numeric field needs integer 'minimum' and 'maximum' to become a score` |
 | `{"type": "integer", "minimum": 5, "maximum": 2}` | `properties.name: 'maximum' 2 is below 'minimum' 5` |
 | `{"type": "integer", "minimum": 0, "maximum": 10}` | `properties.name: 11 levels exceeds MAX_SCORE_LEVELS=10; narrow the range or use an enum` |
@@ -87,7 +94,8 @@ A schema that cannot be answered from a fixed option set raises `laya.structured
 | `{"format": "date"}` | `properties.name: unsupported schema {'format': 'date'}` |
 | `"boolean"` | `properties.name: property must be an object, got str` |
 
-The entry points themselves reject these:
+The entry points themselves reject these; the last row needs a whole schema, because a `$ref` cycle
+runs through its `$defs`:
 
 | call | message |
 |---|---|
@@ -97,6 +105,7 @@ The entry points themselves reject these:
 | `plan_from_json_schema({"type": "object", "properties": {"p%d" % i: {"type": "boolean"} for i in range(33)}})` | `33 properties exceeds MAX_PROPERTIES=32` |
 | `plan_from_json_schema({"type": "object", "properties": {"name": {"enum": ["v%d" % i for i in range(33)]}}})` | `properties.name: 33 options exceeds MAX_OPTIONS=32` |
 | `decide(None, "I was charged twice.", schema=42)` | `expected a JSON schema dict or a pydantic model, got int` |
+| `plan_from_json_schema({"type": "object", "properties": {"name": {"$ref": "#/$defs/Loop"}}, "$defs": {"Loop": {"$ref": "#/$defs/Loop"}}})` | `properties.name: $ref '#/$defs/Loop' is recursive; flatten the schema` |
 
 Limits: `MAX_PROPERTIES = 32`, `MAX_OPTIONS = 32`, `MAX_SCORE_LEVELS = 10`.
 
@@ -133,9 +142,16 @@ values = agent.decide_batch(ticket_texts, schema=Ticket)          # values[i] ma
 results = router.decide_batch(states, schema=Ticket, return_details=True, batch_size=64)
 ```
 
-On a `Router` each state is still routed on its own, so one call can span checkpoints. Keyword
-arguments reach `predict_batch`, so `batch_size=`, `model=` and hooks work as they do for `decide`.
-`Agent`, `ONNXAgent` and `Router` all have it; a runner without `predict_batch` raises
+On a `Router` each state is still routed on its own, so one call can span checkpoints. Which
+keywords reach `predict_batch` depends on who reads them. The call-level ones — `batch_size=`,
+`hooks=`, `sort_by_length=` — are passed as keywords to `predict_batch`. The routing pins and the
+token budget — `model=`, `task=`, `lang=`, `lang_guess=`, `max_len=`, `head_max_len=`, the tuple
+`laya/structured.py::_ROUTER_REQUEST_KEYS` names — are read off every *request* by a `Router`, whose
+`predict_batch` declares none of them, so `decide_batch` copies them onto each request instead; that
+is why `decide_batch(states, schema=..., model="multilingual")` pins a checkpoint the way `decide`
+does. On an `Agent`-like runner the split is visible: its `predict_batch` declares `batch_size=`,
+`hooks=` and `lang=` but no `model=` and swallows nothing, so `model=` there is a `TypeError`, not a
+silent extra keyword. `Agent`, `ONNXAgent` and `Router` all have it; a runner without `predict_batch` raises
 `TypeError` rather than silently falling back to a loop — call `decide` per state there. Batching can shift borderline argmaxes the
 same way `predict_batch` does; the README records the measured speedups for both devices.
 
@@ -148,7 +164,7 @@ with per-field confidence, probabilities, the raw answers, and the usage and rou
 result = agent.decide(state, schema=Ticket, return_details=True)
 result.values["department"]            # "billing"
 result.answer_confidence["department"] # 0.94  max(p): the quantity min_confidence gates on
-result.confidence["department"]        # 0.71  normalized entropy, which depends on label count
+result.confidence["department"]        # 0.79  1 - H(p)/log(k) on this 3-option `choice` field
 result.probabilities["department"]     # {"billing": 0.94, "support": 0.06, "sales": 0.0}
 result.usage                           # {"input_tokens": ..., "output_tokens": 0,
                                        #  "state_tokens": ..., "state_tokens_dropped": ...,
@@ -169,10 +185,15 @@ to the code that builds it.
 `answer_confidence` is `max(p)`, the probability mass on the answer being reported. It is what
 temperature scaling fits, what every calibration figure in this repository is computed on, and what
 `min_confidence` is compared against — which is the reason to gate on it rather than on
-`confidence`. `confidence` is normalized entropy, which depends on how many options the question
-had: `tests/test_confidence.py` pins that a two-option distribution comes back as 0.90 on a `noul`
-and 0.53 on an equivalent `choice`, so it does not compare against a threshold. A field that
-reported no usable `answer_confidence` maps to `None`, which is not the same as a reported `0.0`.
+`confidence`. `confidence` is not one formula. On a `choice` or a `score` it is normalized entropy,
+`1 - H(p) / log(k)`, whose scale moves with the number of options the question had. On a `noul` it is
+`max(p_true, 1 - p_true)`, the probability of the side being reported, which over two options is
+`max(p)`. `tests/test_confidence.py` pins a two-option distribution as 0.90 on a `noul` against 0.53
+on an equivalent `choice`; 0.53 is what entropy gives at `k = 2`, so the 0.90 is the second formula and
+not the first at a smaller option count. The schema above mixes both — `department` is a `choice`,
+`needs_human` a `noul` — so one `DecisionResult.confidence` dict can hold two scales at once, which is
+why neither reading compares against a threshold you have not measured per type. A field that reported
+no usable `answer_confidence` maps to `None`, which is not the same as a reported `0.0`.
 
 Gate on the same quantity the gate uses:
 
@@ -202,6 +223,14 @@ gate and the eval harness both use.
 - A `description` becomes the question instructions, so a good description is what makes the
   decision accurate. This follows the same rule as the [hooks guide](hooks/index.md): be explicit
   about what each option means.
+- A local `$ref` (`#/$defs/...` or `#/definitions/...`) is replaced by the definition it names
+  before the field is planned, so a pydantic `Enum` asks exactly the question the matching `Literal`
+  asks and projects to the member's value, which `answer_to_pydantic` turns back into the member.
+  The property's own keys sit on top and the definition's `description` is dropped: pydantic fills
+  it from the enum's docstring (pydantic v1 with "An enumeration." when there is none), which
+  describes the type rather than the question, so the wording is still the field's `description`.
+  A ref to another document, a missing entry or a cycle raises, and a ref to a model is a nested
+  object.
 - A `null` branch is dropped before the field is planned, so `Optional[X]` asks exactly the question
   `X` asks. The field's key is simply absent from the values when there is no answer for it, which is
   what makes it safe to declare a field optional without changing what the model sees.

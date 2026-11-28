@@ -24,10 +24,10 @@ banner("03", "Reading the result", """
 
     `usage` is the part readers misread: `input_tokens` is the whole batch, with the state
     counted once per question, so it grows with the number of questions rather than being a
-    context length. `output_tokens` is always 0 -- Laya never generates text. The four keys
-    after them are how much of your state the model actually read: `state_tokens` is the whole
+    context length. `output_tokens` is always 0 -- Laya never generates text. The keys after
+    them are how much of your state the model actually read: `state_tokens` is the whole
     serialized state, `state_tokens_dropped` the most of it any one question's head gave up,
-    and `truncated` / `truncated_questions` name the questions that gave something up. A seventh
+    and `truncated` / `truncated_questions` name the questions that gave something up. One more
     key, `options`, appears only when the head budget was tight enough to leave some question's
     options sharing a token span -- that question can no longer tell those options apart, and
     `usage["options"]` is where the call says so.
@@ -94,10 +94,14 @@ print("   score  : type, score, legend {index: text}, probabilities {index: p},"
 print("            confidence, answer_confidence, action")
 print("            (indexes and legend keys are strings: \"0\", \"1\", ...)")
 print("   noul   : type, noul (P(true)), confidence, answer_confidence, action")
-print("   `confidence` is 1 minus normalised entropy -- a scale that moves with the option")
-print("   count on the same answer. `answer_confidence` is max(p), the probability mass on")
-print("   the answer being reported, and it is the field to gate on (example 18 routes at a")
-print("   threshold on it).")
+print("   `confidence` is not one formula: it is 1 minus normalised entropy on a `choice` or")
+print("   `score` answer, but max(p[1], 1 - p[1]) -- the probability of the more likely side --")
+print("   on a `noul`. The scales are not comparable: p(true)=0.600 reads 0.600 as a `noul` and")
+print("   would read 0.029 as entropy, while 0.900 reads 0.900 against 0.531. `answer_confidence`")
+print("   is max(p), the probability mass on the answer being reported -- that same quantity on")
+print("   every question type, and the field to gate on (example 18 routes at a threshold on it).")
+print("   A calibration payload that carries `binning_map` remaps `answer_confidence` and leaves")
+print("   `confidence` alone.")
 print("   every answer also carries action['act_probability'], a separate two-way head over")
 print("   the same encoder (see agent.cfg['act_costs'] / ['cost_wrong_act']). The typed")
 print("   fields above are the decision; action is an auxiliary signal your policy may use.")

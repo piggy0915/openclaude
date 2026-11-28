@@ -1,7 +1,7 @@
 import { analyse, type AnalyseResult } from "./lang.js";
-import type { PredictOptions, QuestionDef, SystemOneResult } from "./agent.js";
+import { checkQuestion, type PredictOptions, type QuestionDef, type SystemOneResult } from "./agent.js";
 import { checkMinConfidence, flagLowConfidence } from "./common.js";
-import { decide, type DecideOptions, type DecisionResult } from "./structured.js";
+import { decide, decideBatch, type DecideOptions, type DecideBatchOptions, type DecisionResult } from "./structured.js";
 import {
   HookRegistry,
   PredictContext,
@@ -121,6 +121,7 @@ export interface RouterOptions {
   token?: string | null;
   maxLoaded?: number;
   max_loaded?: number;
+  /** Fallback for unidentified text. Defaults to "multilingual", matching Python 0.4.0. */
   default?: string;
   autoTaskDetection?: boolean;
   auto_task_detection?: boolean;
@@ -151,6 +152,21 @@ export interface RouteOptions {
   langGuess?: LangGuess;
   lang_guess?: LangGuess;
   hooks?: HookArg;
+  hooksRaise?: boolean;
+}
+
+/**
+ * Per-call options for `Router.predictBatch` / `predictMany` / `routeBatch`.
+ * `hooks`, `onPredictStart` and `onPredictEnd` are composed the same way as on `predict`:
+ * `setDefaultHooks` defaults, then installed hooks, then this call's hooks.
+ * `null`, `undefined` and `[]` add nothing.
+ * `hooksRaise` overrides the Router's policy for this call, including `onRoute`.
+ * The start and end callables apply to each request's predict lifecycle, not to routing.
+ */
+export interface PredictBatchOptions {
+  hooks?: HookArg;
+  onPredictStart?: PredictHook;
+  onPredictEnd?: PredictHook;
   hooksRaise?: boolean;
 }
 
@@ -287,7 +303,7 @@ export class Router extends HookRegistry {
       }
     }
     this.maxLoaded = Math.max(1, Math.trunc(Number(opts.maxLoaded ?? opts.max_loaded ?? 2)));
-    this.default = normaliseName(opts.default ?? "english");
+    this.default = normaliseName(opts.default ?? "multilingual");
     this.autoTaskDetection = Boolean(opts.autoTaskDetection ?? opts.auto_task_detection ?? false);
     this.langGuess = opts.langGuess ?? opts.lang_guess ?? null;
     this.loader = opts.loader ?? null;
@@ -434,6 +450,13 @@ export class Router extends HookRegistry {
     questions: Record<string, unknown> | null = null,
     opts: RouteOptions = {},
   ): RouteDecision {
+    if (questions !== null && questions !== undefined) {
+      if (typeof questions !== "object" || Array.isArray(questions)) {
+        throw new TypeError(
+          `questions must be a dict of question id -> definition, got ${Array.isArray(questions) ? "Array" : typeof questions}`,
+        );
+      }
+    }
     const decision = this._route(state, questions, opts);
     const raiseErrors = opts.hooksRaise ?? this.hooksRaise;
     const active = composeHooks(this.hooks, opts.hooks);
@@ -568,31 +591,53 @@ export class Router extends HookRegistry {
     questions: Record<string, QuestionDef>,
     opts: RouteOptions & PredictOptions = {},
   ): Promise<RoutedResult> {
+    if (state === null || state === undefined) {
+      throw new TypeError("state must not be None; pass a string, dict, or list");
+    }
+    if (typeof questions !== "object" || questions === null || Array.isArray(questions)) {
+      throw new TypeError(
+        `questions must be a dict of question id -> definition, got ${questions === null ? "null" : Array.isArray(questions) ? "Array" : typeof questions}`,
+      );
+    }
     const mcOpt = opts.minConfidence ?? opts.min_confidence;
     const mc = mcOpt !== undefined && mcOpt !== null ? checkMinConfidence(mcOpt) : null;
     const active = composeHooks(this.hooks, opts.hooks, opts.onPredictStart, opts.onPredictEnd);
     const raiseErrors = opts.hooksRaise ?? this.hooksRaise;
-
-    // Per-call hooks apply to the whole call, including onRoute inside route().
-    const decision = this.route(state, questions, opts);
-    const agent = (await this.load(decision.model)) as {
-      systemOne(
-        s: unknown,
-        q: Record<string, QuestionDef>,
-        opts?: PredictOptions,
-      ): Promise<SystemOneResult>;
-    };
+    const hasStart = active.some((h) => typeof h.onPredictStart === "function");
     const ctx = new PredictContext({
       states: [state],
       questions: questions as Record<string, unknown>,
-      decision: { ...decision } as unknown as Record<string, unknown>,
-      model: decision.model,
-      agent,
+      decision: null,
+      model: null,
+      agent: null,
       router: this,
     });
     try {
+      // Per-call hooks apply to the whole call, including onRoute inside route().
+      const decision = this.route(state, questions, opts);
+      ctx.decision = { ...decision } as unknown as Record<string, unknown>;
+      ctx.model = decision.model;
+      const agent = (await this.load(decision.model)) as {
+        systemOne(
+          s: unknown,
+          q: Record<string, QuestionDef>,
+          opts?: PredictOptions,
+        ): Promise<SystemOneResult>;
+      };
+      ctx.agent = agent;
+
       await dispatchAsync(active, "onPredictStart", ctx, { raiseErrors });
       if (ctx.results === null) {
+        if (hasStart) {
+          if (typeof ctx.questions !== "object" || ctx.questions === null || Array.isArray(ctx.questions)) {
+            throw new TypeError(
+              `questions must be a dict of question id -> definition, got ${ctx.questions === null ? "null" : Array.isArray(ctx.questions) ? "Array" : typeof ctx.questions}`,
+            );
+          }
+        }
+        for (const [qid, qdef] of Object.entries(ctx.questions as Record<string, QuestionDef>)) {
+          checkQuestion(qid, qdef);
+        }
         // Python parity (router.py predict): the request's language also shapes the answer
         // distribution through the agent's lang_temperatures. An explicit lang wins;
         // otherwise forward the language the router detected for the routing decision.
@@ -669,6 +714,29 @@ export class Router extends HookRegistry {
     return decide(this, state, schema, opts);
   }
 
+  /**
+   * Answer many states against one schema in one batched call (Python `Router.decide_batch` parity).
+   * Requests route per state and evaluate through `predictBatch` (grouped forward passes, results
+   * in input order). See `structured.ts`.
+   */
+  async decideBatch(
+    states: unknown[],
+    schema: unknown,
+    opts: DecideBatchOptions & RouteOptions & PredictOptions & { returnDetails: true },
+  ): Promise<DecisionResult[]>;
+  async decideBatch(
+    states: unknown[],
+    schema?: unknown,
+    opts?: DecideBatchOptions & RouteOptions & PredictOptions,
+  ): Promise<Record<string, unknown>[]>;
+  async decideBatch(
+    states: unknown[],
+    schema?: unknown,
+    opts: DecideBatchOptions & RouteOptions & PredictOptions = {},
+  ): Promise<Record<string, unknown>[] | DecisionResult[]> {
+    return decideBatch(this, states, schema, opts);
+  }
+
   async systemOne(
     state: unknown,
     questions: Record<string, QuestionDef>,
@@ -682,7 +750,7 @@ export class Router extends HookRegistry {
    * validated before anything loads, so a malformed batch fails fast. Entries keep input
    * order; routing is deterministic, so repeated batches route identically.
    */
-  routeBatch(requests: BatchRequest[]): RouteDecision[] {
+  routeBatch(requests: BatchRequest[], opts: PredictBatchOptions = {}): RouteDecision[] {
     if (!Array.isArray(requests)) {
       throw new TypeError("requests must be an array of request objects");
     }
@@ -695,6 +763,9 @@ export class Router extends HookRegistry {
       }
       if (!("state" in request)) {
         throw new Error(`request ${i} is missing required key 'state'`);
+      }
+      if (request.state === null || request.state === undefined) {
+        throw new TypeError(`request ${i} 'state' must not be None; pass a string, dict, or list`);
       }
       if (!("questions" in request)) {
         throw new Error(`request ${i} is missing required key 'questions'`);
@@ -711,6 +782,8 @@ export class Router extends HookRegistry {
           task: request.task ?? null,
           lang: request.lang ?? null,
           langGuess: request.langGuess ?? request.lang_guess ?? null,
+          hooks: opts.hooks,
+          hooksRaise: opts.hooksRaise,
         }),
       );
     }
@@ -731,12 +804,18 @@ export class Router extends HookRegistry {
    * Router-level predict hooks run per request: each request gets its own PredictContext
    * carrying `decision`; `onPredictStart` may rewrite a request or `ctx.skip()` it, and
    * `onPredictEnd` runs once per started request even when the batch fails.
+   * `opts.hooks`, `opts.onPredictStart` and `opts.onPredictEnd` are composed the way `predict`
+   * composes them: `setDefaultHooks` defaults, then installed hooks, then this call's hooks.
+   * `null` and `[]` add nothing. `hooks`
+   * also run `onRoute`. `opts.hooksRaise` overrides the Router's policy for this call, the way
+   * `predict` uses `opts.hooksRaise ?? this.hooksRaise`.
    */
   async predictBatch(
     requests: BatchRequest[],
     batchSize: number | null = null,
+    opts: PredictBatchOptions = {},
   ): Promise<RoutedResult[]> {
-    const decisions = this.routeBatch(requests);
+    const decisions = this.routeBatch(requests, opts);
     if (decisions.length === 0) return [];
 
     const groups = new Map<string, number[]>();
@@ -748,8 +827,12 @@ export class Router extends HookRegistry {
     }
 
     const results: (RoutedResult | null)[] = new Array(requests.length).fill(null);
-    const active = composeHooks(this.hooks);
-    const raiseErrors = this.hooksRaise;
+    // `composeHooks`, not `this.hooks`: `setDefaultHooks` defaults, then installed hooks,
+    // then per-call `opts.hooks`, then `opts.onPredictStart` / `opts.onPredictEnd`. The instance
+    // list alone would drop every default `predict` keeps. `routeBatch` has already validated
+    // `opts.hooks`; start and end are validated here, after routing and before a checkpoint loads.
+    const active = composeHooks(this.hooks, opts.hooks, opts.onPredictStart, opts.onPredictEnd);
+    const raiseErrors = opts.hooksRaise ?? this.hooksRaise;
 
     for (const [modelName, indices] of groups) {
       const agent = (await this.load(modelName)) as {
@@ -924,8 +1007,9 @@ export class Router extends HookRegistry {
   async predictMany(
     requests: BatchRequest[],
     batchSize: number | null = null,
+    opts: PredictBatchOptions = {},
   ): Promise<RoutedResult[]> {
-    return this.predictBatch(requests, batchSize);
+    return this.predictBatch(requests, batchSize, opts);
   }
 
   /**

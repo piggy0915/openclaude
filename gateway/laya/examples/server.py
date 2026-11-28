@@ -70,6 +70,11 @@ MAX_CHOICE_OPTIONS = getattr(_laya_serve, "MAX_CHOICE_OPTIONS", 100)
 MAX_SCORE_LEVELS = getattr(_laya_serve, "MAX_SCORE_LEVELS", 32)
 MAX_TOTAL_OPTIONS = getattr(_laya_serve, "MAX_TOTAL_OPTIONS", 512)
 DEFAULT_MAX_TOKEN_BUDGET = getattr(_laya_serve, "DEFAULT_MAX_TOKEN_BUDGET", 8192)
+# `/predict/batch` collates `states x questions` rows into one tensor and each row costs its width,
+# so the field caps multiply and `max_len` multiplies again. Same getattr as the rest: a batch this
+# demo answers but `laya.serve` refuses would break the parity its own test file states.
+DEFAULT_MAX_BATCH_TOKENS = getattr(_laya_serve, "DEFAULT_MAX_BATCH_TOKENS", 131072)
+_BATCH_ROW_TOKENS_ASSUMED = getattr(_laya_serve, "_BATCH_ROW_TOKENS_ASSUMED", 512)
 
 # The set of controls a client may put on the body, and the set that must be refused rather than
 # silently dropped -- both read from `laya.serve` so the demo cannot drift from the server it
@@ -176,6 +181,24 @@ def _check_model(v: Optional[str]) -> Optional[str]:
 # detail a caller sees on `main` are the same as the shipped server's.
 _resolve_max_token_budget = getattr(_laya_serve, "_resolve_max_token_budget",
                                     lambda: DEFAULT_MAX_TOKEN_BUDGET)
+_resolve_max_batch_tokens = getattr(_laya_serve, "_resolve_max_batch_tokens",
+                                    lambda: DEFAULT_MAX_BATCH_TOKENS)
+
+
+def _fallback_batch_chunk_size(n_states, n_questions, max_len=None):
+    if n_states <= 0 or n_questions <= 0:
+        return None
+    width = (max_len if isinstance(max_len, int) and not isinstance(max_len, bool) and max_len > 0
+             else _BATCH_ROW_TOKENS_ASSUMED)
+    budget = _resolve_max_batch_tokens()
+    if n_states * n_questions * width <= budget:
+        return None
+    return max(1, min(n_states, max(1, budget // width) // n_questions))
+
+
+# The planner itself comes from laya.serve when it is there, so the demo splits a batch exactly as the
+# shipped server does rather than keeping a second copy of the arithmetic.
+_batch_chunk_size = getattr(_laya_serve, "_batch_chunk_size", _fallback_batch_chunk_size)
 
 
 def _fallback_refuse_body_refusals(body: Dict[str, Any]) -> None:
@@ -391,19 +414,25 @@ ROUTER: Optional[Router] = None
 _CFG: Dict[str, Any] = {
     "preload": os.getenv("LAYA_PRELOAD", "1") not in ("0", "false", "False"),
     "device": os.getenv("LAYA_DEVICE") or None,
-    "default": os.getenv("LAYA_DEFAULT_MODEL", "english"),
-    # None means "not asked for", so Router keeps its own default instead of this file
-    # carrying a copy of it. The copy here said 1, the number #172 measured at one
-    # checkpoint rebuild per alternating-language request, and #180 retired it in the
-    # library without this line following.
+    # None means "not asked for", so Router keeps its own default instead of this file carrying
+    # a copy of it. The copy below said 1, the number #172 measured at one checkpoint rebuild per
+    # alternating-language request, and #180 retired it in the library without this line
+    # following. `default` was the same mistake about a checkpoint: 3cf26cb moved Router's own
+    # default to `multilingual` in 0.4.0 while this file went on answering a state with no
+    # language evidence from the English arm, whereas laya-serve and the MCP server -- which send
+    # neither key when the variable is unset -- moved with it.
+    "default": (os.environ["LAYA_DEFAULT_MODEL"].strip()
+                if os.getenv("LAYA_DEFAULT_MODEL", "").strip() else None),
     "max_loaded": (int(os.environ["LAYA_MAX_LOADED"])
                    if os.getenv("LAYA_MAX_LOADED", "").strip() else None),
 }
 
 
 def _router_kwargs(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """Constructor arguments for the app's Router, with the resident cap only when asked for."""
-    kwargs = {"preload": cfg["preload"], "device": cfg["device"], "default": cfg["default"]}
+    """Constructor arguments for the app's Router, with the two opt-in knobs only when asked for."""
+    kwargs = {"preload": cfg["preload"], "device": cfg["device"]}
+    if cfg["default"] is not None:
+        kwargs["default"] = cfg["default"]
     if cfg["max_loaded"] is not None:
         kwargs["max_loaded"] = cfg["max_loaded"]
     return kwargs
@@ -470,7 +499,11 @@ def health(request: Request):
 @app.get("/models")
 def models(request: Request):
     payload = {
-        "default": _CFG["default"],
+        # Which checkpoint answers a state with no language evidence -- the built Router's answer
+        # rather than this file's copy of it, for the same reason `/health` prints the cap the
+        # Router holds. Until a Router exists the requested value is all there is, and it says
+        # None when nothing was asked for.
+        "default": getattr(ROUTER, "default", _CFG["default"]),
         "allowed": sorted(MODELS),
         # `allowed` alone would under-report the endpoint: a checkpoint may also be named by any
         # alias core resolves, in any casing. Both lists come from laya.router, not from this file.
@@ -609,6 +642,13 @@ def predict_batch(req: BatchRequest) -> Dict[str, Any]:
     shape = {}
     if req.batch_size is not None:
         shape["batch_size"] = req.batch_size
+    else:
+        # Split the batch so one forward pass stays inside laya.serve's token budget, read by the same
+        # getattr as every other bound here. None when the request already fits, so the call is
+        # unchanged -- `predict_batch` warns that batch shapes can move floating-point results.
+        planned = _batch_chunk_size(len(req.states), len(req.questions), req.max_len)
+        if planned is not None:
+            shape["batch_size"] = planned
     if req.sort_by_length:
         shape["sort_by_length"] = True
     if req.min_confidence is not None:
@@ -1185,10 +1225,20 @@ def _answer_dist(kind: str, ans: Dict[str, Any], question: Dict[str, Any]) -> tu
 
 
 _CERTAINTY_TIP = (
-    "The `confidence` field is 1 minus the normalized entropy of the whole distribution: how peaked it is. "
-    "It is not calibrated, so do not gate on it. `answer_confidence` is the probability of the "
-    "reported answer, calibrated so that answers returned at 0.9 are right about 90% of the time."
+    "`confidence` is not one formula, and it is not calibrated, so do not gate on it. On a `choice` or a "
+    "`score` it is 1 minus the normalized entropy of the whole distribution: how peaked it is, on a scale "
+    "that moves with the number of options. On a `noul` it is the probability of the side being reported, "
+    "max(p_true, 1 - p_true). `answer_confidence` is the probability of the reported answer, the quantity "
+    "temperature scaling fits and this repository's calibration figures are computed on; a figure measured "
+    "on a benchmark is not a promise about your traffic, so gate on a threshold you have measured."
 )
+# The browser builds the same chip, so the boot script serializes this dict to it instead of the two
+# languages each typing a formula for a field whose formula depends on the question type.
+_CERTAINTY_LABEL = {
+    "choice": "entropy, not calibrated",
+    "score": "entropy, not calibrated",
+    "noul": "the reported side, not calibrated",
+}
 _UNSURE = 0.6
 
 
@@ -1256,7 +1306,8 @@ def _answer_row(name: str, ans: Any, question: Dict[str, Any], n: int) -> str:
     if isinstance(certainty, (int, float)) and abs(float(certainty) - calibrated) > 5e-5:
         meta += (
             f"<span class='tipw'><button type='button' class='tipt' aria-describedby='tip-{n}'>"
-            f"<code>confidence</code> <b>{float(certainty):.4f}</b> entropy, not calibrated {_icon('info')}</button>"
+            f"<code>confidence</code> <b>{float(certainty):.4f}</b> "
+            f"{_CERTAINTY_LABEL[kind]} {_icon('info')}</button>"
             f"<span class='tipb' role='tooltip' id='tip-{n}'>{_with_code(_CERTAINTY_TIP)}</span></span>"
         )
     return (
@@ -2990,8 +3041,8 @@ function answerRow(key, ans, q, n) {
   if (typeof ans.confidence === "number" && Math.abs(ans.confidence - calibrated) > 5e-5)
     meta.append(h("span", {class: "tipw"},
       h("button", {type: "button", class: "tipt", "aria-describedby": "tip-" + n},
-        h("code", {text: "confidence"}), h("b", {text: ans.confidence.toFixed(4)}), "entropy, not calibrated",
-        icon("info")),
+        h("code", {text: "confidence"}), h("b", {text: ans.confidence.toFixed(4)}),
+        CERTAINTY_LABEL[kind], icon("info")),
       h("span", {class: "tipb", role: "tooltip", id: "tip-" + n}, withCode(CERTAINTY_TIP))));
   return h("details", {class: "ans", open: true}, h("summary", null, head, verdict),
     h("div", {class: "a-body"}, score != null && maxLevel > 0 ? scale(score, maxLevel) : null, dist, meta));
@@ -3476,6 +3527,7 @@ def index(request: Request) -> HTMLResponse:
         f"<script>const EXAMPLE = {_script_json(example)}; const PRESETS = {presets_js};"
         f" const QTYPES = {_script_json(sorted(getattr(laya, 'QTYPES', {}) or {}) or ['choice', 'score', 'noul'])};"
         f" const LIMITS = {_script_json({'questions': MAX_QUESTIONS, 'stateChars': MAX_STATE_CHARS})};"
+        f" const CERTAINTY_LABEL = {_script_json(_CERTAINTY_LABEL)};"
         "</script>"
     )
     return _html(
@@ -3766,7 +3818,8 @@ def main() -> None:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--device", default=_CFG["device"], help="cuda, cpu, mps ...")
-    p.add_argument("--default-model", default=_CFG["default"])
+    p.add_argument("--default-model", default=_CFG["default"],
+                   help="routing fallback (default: LAYA_DEFAULT_MODEL, else laya's own)")
     p.add_argument("--max-loaded", type=int, default=_CFG["max_loaded"],
                    help="checkpoints kept resident (default: LAYA_MAX_LOADED, else laya's own)")
     p.add_argument("--no-preload", action="store_true", help="load checkpoints lazily")
@@ -3776,7 +3829,8 @@ def main() -> None:
     _CFG.update(
         preload=not args.no_preload,
         device=args.device,
-        default=args.default_model,
+        # A blank name means the same thing here as an unset variable does above.
+        default=(args.default_model or "").strip() or None,
         max_loaded=args.max_loaded,
     )
 
@@ -3786,7 +3840,13 @@ def main() -> None:
         # os.getenv() defaults do. Push the resolved config through those same env vars so the
         # reimport picks up what was actually asked for on the command line.
         os.environ["LAYA_PRELOAD"] = "1" if _CFG["preload"] else "0"
-        os.environ["LAYA_DEFAULT_MODEL"] = _CFG["default"]
+        if _CFG["default"] is None:
+            # "not asked for" has to stay unpushed here too: str(None) would name a checkpoint
+            # called "None" for the reimported process, which stops it at the same name
+            # resolution the operator was trying to leave to laya.
+            os.environ.pop("LAYA_DEFAULT_MODEL", None)
+        else:
+            os.environ["LAYA_DEFAULT_MODEL"] = _CFG["default"]
         if _CFG["max_loaded"] is None:
             # "not asked for" has to stay unpushed: writing str(None) here would land on the
             # int() above in the reimported process and stop the server at import.

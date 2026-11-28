@@ -41,3 +41,6 @@ temp_reference/
 /gateway/agentchat-framework/
 /gateway/models/
 /gateway/whisper-model/
+/gateway/freellmapi/
+/gateway/forge/
+/gateway/laya/

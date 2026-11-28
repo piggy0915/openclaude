@@ -52,7 +52,7 @@ def fake_agent(monkeypatch):
 ])
 def test_mixed_groups_keep_order_and_lru(fake_agent, capacity, expected):
     built, calls = fake_agent
-    router = Router(max_loaded=capacity, auto_task_detection=True)
+    router = Router(max_loaded=capacity, default="english", auto_task_detection=True)
     typed = {key: {"type": "noul", "instructions": "?"} for key in
              ("action", "needs_review", "outcome", "risk", "urgency")}
     items = [request("English text one"), request("مرحبا"),
@@ -82,6 +82,7 @@ def test_mixed_groups_keep_order_and_lru(fake_agent, capacity, expected):
     ("text", TypeError, "requests must be a sequence"),
     ([None], TypeError, "request 0"),
     ([{"questions": Q}], ValueError, "request 0 is missing required key 'state'"),
+    ([{"state": None, "questions": Q}], TypeError, "request 0 'state' must not be None"),
     ([{"state": "x"}], ValueError, "request 0 is missing required key 'questions'"),
     ([request("x"), {"state": "y", "questions": None}], TypeError, "request 1 'questions'"),
     ([request("x"), request("y", model="invalid")], ValueError, "unknown model"),
@@ -97,7 +98,7 @@ def test_invalid_batch_fails_before_loading(fake_agent, items, error, fragment):
 
 def test_inference_exception_propagates_and_cache_remains_consistent(fake_agent):
     built, calls = fake_agent
-    router = Router(max_loaded=1)
+    router = Router(max_loaded=1, default="english")
     with pytest.raises(RuntimeError, match="inference failed"):
         router.predict_batch([request("first"), request("raise", lang="ar"),
                               request("unreached", lang="ar")])
@@ -137,14 +138,14 @@ def test_evicted_checkpoint_is_unreferenced_when_it_is_evicted(monkeypatch):
             evicted_alive.append((ctx.model, refs[ctx.model]() is not None))
 
     monkeypatch.setattr(laya.agent, "Agent", Agent)
-    router = Router(max_loaded=1, hooks=[CheckFreed()])
+    router = Router(max_loaded=1, default="english", hooks=[CheckFreed()])
     router.predict_batch([request("english text"), request("مرحبا")])
     assert evicted_alive == [("english", False)]
 
 
 def test_warm_cache_and_repeated_batches(fake_agent):
     built, _ = fake_agent
-    router = Router(max_loaded=2)
+    router = Router(max_loaded=2, default="english")
     router.load("multilingual")
     result = router.predict_batch([request("en", model="english"),
                                    request("ar", model="multilingual"),
@@ -159,7 +160,7 @@ def test_warm_cache_and_repeated_batches(fake_agent):
 
 def test_same_checkpoint_same_questions_uses_one_agent_batch(fake_agent):
     _, calls = fake_agent
-    router = Router(max_loaded=2)
+    router = Router(max_loaded=2, default="english")
     items = [
         request("one", model="english"),
         request("two", model="english"),
@@ -178,7 +179,7 @@ def test_same_checkpoint_same_questions_uses_one_agent_batch(fake_agent):
 
 def test_same_checkpoint_different_questions_split_agent_batches(fake_agent):
     _, calls = fake_agent
-    router = Router(max_loaded=2)
+    router = Router(max_loaded=2, default="english")
     q2 = {"risk": {"type": "noul", "instructions": "Risky?"}}
     items = [
         {"state": "one", "questions": Q, "model": "english"},
@@ -246,7 +247,7 @@ def test_concurrent_batch_load_deduplicates(monkeypatch):
             return self.predict_batch([state], questions)[0]
 
     monkeypatch.setattr(laya.agent, "Agent", SlowAgent)
-    router = Router(max_loaded=2)
+    router = Router(max_loaded=2, default="english")
     start = Barrier(8)
 
     def worker(_):
@@ -557,3 +558,32 @@ def test_sort_by_length_is_dropped_for_agents_that_predate_it(monkeypatch):
     assert len(results) == 2
     assert [c["sort"] for c in calls] == ["unsupported"]  # one group, retry without the knob
     assert [r["routing"]["model"] for r in results] == ["english", "english"]
+
+
+def test_predict_batch_memoizes_identical_question_schema(monkeypatch):
+    """Router.predict_batch memoizes question schema serialization across consecutive requests
+    sharing the identical questions dictionary, avoiding redundant json.dumps() per item."""
+    import laya.router
+    calls = []
+    real_schema = laya.router._question_schema
+
+    def recording_schema(q):
+        calls.append(q)
+        return real_schema(q)
+
+    monkeypatch.setattr(laya.router, "_question_schema", recording_schema)
+    router, _ = _sort_recording_router(monkeypatch, accepts_sort=True)
+
+    shared_q = {"intent": {"type": "noul", "instructions": "Urgent?"}}
+    other_q = {"intent": {"type": "noul", "instructions": "Different?"}}
+
+    requests = [
+        {"state": "a", "questions": shared_q},
+        {"state": "b", "questions": shared_q},
+        {"state": "c", "questions": shared_q},
+        {"state": "d", "questions": other_q},
+    ]
+    results = router.predict_batch(requests)
+    assert len(results) == 4
+    # Exactly 2 schema serializations instead of 4
+    assert len(calls) == 2

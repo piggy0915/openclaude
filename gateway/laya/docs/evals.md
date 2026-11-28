@@ -29,6 +29,117 @@ Exit codes: `0` on success, `1` when a threshold or a baseline tolerance fails, 
 usage error. `run` prints the overall metrics and any requested slices to stdout, and writes
 the full report and a Markdown summary when `--json` / `--markdown` are given.
 
+## Comparing a student with repeated teacher decisions
+
+When a teacher gives different answers to the same input, a single saved answer
+does not describe its repeatability. `compare_agreement` compares a student and
+an independent teacher repeat against one fixed reference teacher observation.
+It takes three saved runs and needs no model weights or teacher service:
+
+```bash
+laya-evals agreement reference.json repeat.json student.json \
+    --bootstrap-samples 2000 --seed 0 --json agreement.json
+```
+
+Without `--json`, the command writes the report to stdout. `--seed` controls only
+the bootstrap, not model generation. Success exits `0`; malformed or misaligned
+runs exit `2`. This command does not apply a replacement or quality gate.
+
+Each input is a JSON object with the following shape:
+
+```json
+{
+  "schema": "laya-agreement-run/1",
+  "run_id": "teacher-reference",
+  "provenance": {
+    "model": "teacher-checkpoint",
+    "revision": null,
+    "settings": {"temperature": 0.7, "prompt_template": "Choose one label."},
+    "seed": 42
+  },
+  "cases": [{
+    "id": "ticket-001",
+    "state": "I was charged twice.",
+    "questions": {"route": {
+      "type": "choice",
+      "instructions": "Select the team responsible for this request.",
+      "criteria": ["billing", "support"]
+    }},
+    "answers": {"route": "billing"},
+    "language": "en",
+    "tags": ["duplicate-charge"]
+  }]
+}
+```
+
+Use a distinct `run_id` for each observation run. All three runs must contain
+exactly the same unique case IDs, states, question definitions, language and tags;
+row order may differ. A state must be non-null JSON. Question definitions preserve option order and accept
+non-empty criteria dictionaries or lists of distinct string labels. Answers must
+cover every question. A student answer may be `null` for abstention; teacher
+answers must be labels. Missing cases, unknown labels, non-finite JSON values and
+duplicate JSON object keys in CLI inputs are errors, rather than omitted samples.
+
+The two teacher runs must declare identical model, revision and settings. Put
+sampling parameters and the prompt template in `settings`, and repetition seeds
+outside it. Other metadata, such as the dataset revision and generation script,
+is preserved. Record immutable model revisions when available; explicitly use
+`null` when unknown. The report flags unknown revisions but cannot verify that
+the recorded provenance is accurate or that the teacher calls were independent.
+Input object order is significant, matching Laya's serialization of structured
+states and questions; keep it identical across the runs.
+
+To run a local student after validating the teacher records:
+
+```python
+import json
+import laya
+from laya.evals import evaluate_agreement
+
+with open("reference.json", encoding="utf-8") as handle:
+    reference = json.load(handle)
+with open("repeat.json", encoding="utf-8") as handle:
+    repeat = json.load(handle)
+revision = "YOUR_CHECKPOINT_COMMIT"
+with laya.Router(device="cpu", revision=revision) as runner:
+    report = evaluate_agreement(
+        runner, reference, repeat, model="english",
+        student_provenance={
+            "model": "convaiinnovations/laya", "revision": revision,
+            "settings": {"device": "cpu"},
+        },
+    )
+print(report["overall"])
+```
+
+The runner uses the same `predict(state, questions, model=...)` protocol as the
+labelled harness (for example, `laya.Router`). Inputs are
+copied before inference. Runner failures propagate; invalid or incomplete outputs
+raise `EvalError`. A choice flagged `abstention="abstained"` becomes a null
+observation, while its underlying choice must still be a valid label.
+
+The separate `laya-agreement-report/1` report records provenance, input hashes,
+individual paired decisions and rates sliced by question ID, language and tag.
+For every decision, teacher repeat agreement is `repeat == reference`, student
+agreement is `student == reference`, and the paired delta is their difference.
+All rates use the full decision count: abstentions contribute zero agreement and
+reduce `student_coverage`. The 95% percentile interval resamples whole case IDs,
+keeping their questions together, and recomputes the ratio of decision sums. It
+is deterministic for fixed inputs, seed and bootstrap count (100–100000). With
+fewer than two cases the interval is `null`. Slice rates have no intervals.
+
+Agreement is not accuracy, and teacher repeatability is not a theoretical ceiling.
+Both models can agree on a wrong answer. The interval describes variation across
+the supplied cases with their saved observations; it does not capture additional
+teacher generations. An interval containing zero does not establish equivalence.
+Inspect slices and individual decisions for label skew, and use labelled evals
+for correctness or calibration claims.
+
+[`examples/evals/teacher_agreement.py`](https://github.com/NandhaKishorM/laya/blob/main/examples/evals/teacher_agreement.py)
+replays two published teacher observations from a pinned public dataset against
+a local Laya checkpoint, saving the three runs and their report. Its small fixed
+sample demonstrates the workflow, not deployment readiness.
+
 ## Attributing shortlist errors
 
 For a labelled high-cardinality choice set, `laya.evals_shortlist.evaluate_shortlist`
@@ -73,6 +184,47 @@ This does not reproduce the BANKING77 results in [issue #102](https://github.com
 those numbers depend on its dataset, checkpoint and bi-encoder. This API makes the
 same kind of diagnosis repeatable on a caller's own labelled set.
 
+## Attributing tournament errors
+
+For a labelled many-option choice set, `laya.evals_tournament.evaluate_tournament`
+runs the existing `predict_tournament` path and keeps its finalist metadata in the
+regular evaluation report:
+
+```python
+import laya
+from laya.evals import Dataset
+from laya.evals_tournament import evaluate_tournament
+
+agent = laya.load()
+dataset_path = "intents.jsonl"
+report = evaluate_tournament(
+    agent, Dataset.from_jsonl(dataset_path), group_size=16,
+    checkpoint_id="my-checkpoint@revision", dataset_path=dataset_path,
+)
+print(report.overall)
+print(report.cases[0]["tournament_status"])
+```
+
+Each choice case records its finalists and number of elimination rounds, and is
+classified as `correct`, `elimination_miss` (the gold label did not reach the
+final call), or `final_choice_miss` (it survived, but the final call chose another
+label). `tournament_survival_rate` is the fraction of all choices whose gold label
+reached the final call; choices needing no elimination are included. Conditional
+`tournament_accuracy_on_survivors` is omitted when none survived. Ordinary
+`choice_accuracy` remains end-to-end accuracy, and all three metrics appear in the
+existing language, model, question and tag slices. Request latency includes every
+tournament round; the report does not time rounds separately.
+
+Use the checkpoint and group size you intend to deploy. The caller supplies the
+checkpoint identifier, ideally an immutable revision; the report cannot inspect
+the weights. Passing `dataset_path` records a SHA256 of the JSONL bytes. The
+`laya-tournament-evals-report/1` schema and group size prevent a baseline gate
+from comparing different strategies as though they were the same measurement.
+Compare group sizes side by side on development data, then evaluate the chosen
+size once on held-out data. The runtime's final probabilities and confidence are
+over finalists, not over the original labels. The metadata identifies whether
+elimination lost the gold label, but not which round lost it.
+
 ## Evaluating an ONNX export
 
 `run --onnx PATH` scores an exported ONNX model through `ONNXAgent` instead of the torch
@@ -84,13 +236,24 @@ python scripts/export_onnx.py --model convaiinnovations/laya --output laya.onnx 
 laya-evals run data.jsonl --onnx laya.int8.onnx --max-ece 0.05
 ```
 
+The export **verifies itself before it exits**: it runs the graph it just wrote in ONNX Runtime at
+batch 1, 2 and 3 and compares against PyTorch, and `scripts/export_onnx.py --quantize` does the same
+for the INT8 copy at a looser tolerance. A graph that cannot serve more than one question fails the
+export instead of being written and deployed. That needs `onnxruntime` (`pip install laya[onnx]`);
+`scripts/export_onnx.py --no-verify` skips it if you only have the exporter installed.
+
+Marker width is dynamic in the exported graph for two or more markers (a graph traced at 2 runs at
+3, 4, 5 and 8), but exactly one marker is baked out by a Python branch in the model, so a
+one-criterion `score` question is not servable from ONNX when every question in the batch has one
+criterion; use the torch path for those. There is no need to re-export per criteria count.
+
 `--model` names the checkpoint the export came from — a Hub id or local path, not a Router
 short name like `english`, since there is no Router on this path (default
 `convaiinnovations/laya`). Its config and tokenizer are loaded from there. The agent serves one checkpoint, so a dataset row
 whose `model` field names a different one fails with a clear error rather than being silently
 answered by the wrong model; `--device` does not apply. `--batch-size` uses the agent's batch
 API when it has one and falls back to one call per state otherwise; `--sort-by-length` is forwarded
-to that batch API, which the per-state fallback has no group to reorder. Pass `--calibration PATH`
+to that batch API; the per-state fallback has no group to reorder. Pass `--calibration PATH`
 to load a fitted calibration map onto `ONNXAgent`, so calibration gates such as `--max-ece`
 evaluate against calibrated probabilities. The report's `config` block records the `onnx` path
 and `calibration` path (when set).
@@ -121,6 +284,12 @@ One JSON object per line (JSONL). Blank lines and lines starting with `#` are ig
 
 `research/evals/dataset.template.jsonl` has a commented example.
 
+A row built in Python with `Example(...)` is held to the same three rules as a JSONL row: `Dataset`
+refuses one whose `questions` or `expected` is not an object, or whose `expected` names a question
+`questions` does not carry, and quotes the row's index in the message. Both routes fail as
+`EvalError` before the first model call, so a mistake in a dataset never arrives as a verdict about
+the runner.
+
 ## Metrics
 
 Each metric is computed per answer where it applies and aggregated over the dataset:
@@ -131,13 +300,94 @@ Each metric is computed per answer where it applies and aggregated over the data
 | `noul_accuracy` | `noul` | fraction whose boolean (probability >= 0.5) matches |
 | `score_mae` | `score` | mean absolute error |
 | `score_within_<tol>` | `score` | fraction within an absolute tolerance |
-| `ece` | any answer with a confidence | expected calibration error, 15 bins, computed on `answer["answer_confidence"]`, the calibrated probability Laya reports on every answer type |
-| `mean_confidence` | any answer with a confidence | mean reported `answer["answer_confidence"]` |
+| `ece` | any answer with a confidence and a known label | expected calibration error, 15 bins, computed on the column `laya.evals._answer_confidence` reads -- `answer["answer_confidence"]` where the answer carries it, and a fallback where it does not; see [which confidence a metric reads](#which-confidence-a-metric-reads) |
+| `brier` | any answer with a confidence and a known label | Brier score of confidence as P(correct), `mean((confidence - correct)**2)`; lower is better |
+| `aurc` | any answer with a confidence and a known label | area under the risk--coverage curve: one risk value per distinct confidence level, each weighted by the answers that level spans; lower is better, and rewards a confidence that *ranks* right from wrong rather than just being calibrated |
+| `selective_accuracy@50`, `selective_accuracy@80` | any answer with a confidence and a known label | accuracy over the answers a confidence threshold at the 50% / 80% coverage point accepts -- what abstaining on the least-confident tail buys. A threshold cannot split a group of equal confidences, so this can cover more than the named fraction; see [coverage cuts](#coverage-cuts-and-ties) |
+| `mean_confidence` | any answer with a confidence | mean of the same column -- `answer["answer_confidence"]` where the answer carries it |
 | `latency_p50_ms`, `latency_p95_ms` | per request | wall time each request waited, informational -- see [batching](#batching-and-timing) |
 | `cost_per_decision_p50_ms`, `cost_per_decision_p95_ms` | per decision | a call's wall time divided by the rows it carried, informational |
 
-Add `ScoreWithin(0.25)` to the evaluator list for a tolerance metric; the default set is
-`choice_accuracy`, `noul_accuracy`, `score_mae`, `mean_confidence`, plus `ece`. From the CLI the
+A "known label" is one `_correct` can judge: a `choice` answer against a string label, or a `noul`
+answer against a boolean. A `score` answer has no `correct` value at any tolerance, so it is left out
+of all five of those metrics -- `ece` included, because `ece`, `brier`, `aurc` and both
+`selective_accuracy@*` read one and the same `(confidence, correct)` column. A `score`-only dataset
+therefore publishes no `ece` however confident its answers are, and `--max-ece` over it fails with
+`metric 'ece' is not in the report` rather than passing on a number that was never computed.
+
+### Which confidence a metric reads
+
+Every row above that takes a confidence (`ece`, `brier`, `aurc`, both `selective_accuracy@*`,
+`mean_confidence`) gets its column from `laya.evals._answer_confidence`, which prefers
+`answer["answer_confidence"]` -- the probability of the answer being reported, the quantity temperature
+scaling fits. It is not a claim that the number is right as shipped: both base checkpoints are
+over-confident and `laya-multilingual` ships no fitted temperatures at all -- see the README's
+[Calibration](https://github.com/NandhaKishorM/laya#calibration) -- which is what `ece` measures
+rather than assumes.
+
+An answer that carries no `answer_confidence` falls through, in order, to `confidence`, then
+`max(p, 1 - p)` for a `noul`, then `max(probabilities)`. Those are different quantities. On `choice`
+and `score` the `confidence` field is normalized entropy, which moves with the option count (#394)
+rather than with how right the answer is; `max(probabilities)` is the mass on the top option, equal to
+the reported answer's probability only when the reported answer is the argmax.
+
+The shape that actually arrives without the field is the strict Jev wire contract: `LAYA_JEV_STRICT`
+drops `answer_confidence` from every answer (`laya/serve.py::_project_jev_strict`, and the flag's row
+in [the HTTP API page](http-api.md)), so a report run over recorded strict responses calibrates the
+entropy number. Measured on three labelled rows -- `choice` carrying `answer_confidence` 0.95 against
+an entropy `confidence` of 0.7887, `score` 0.90 against 0.6410, `noul` 0.87 -- the same dataset scores
+`mean_confidence` 0.9067 and `ece` 0.0900 over the full payloads and 0.7666 and 0.1707 over the strict
+projection. Two reports are comparable only when their answers carry the same field;
+`tests/test_evals.py` pins both paths so a change to that fallback order has to be made deliberately.
+
+### Coverage cuts and ties
+
+Both coverage metrics cut on a confidence **threshold**, and a threshold accepts every answer at its
+own confidence. So a cut never splits a group of answers that share one: when `coverage * n` falls
+inside such a group, every member of the group is accepted. The number of answers behind the figure
+is therefore the group's upper edge rather than the named fraction -- `selective_accuracy@50` over a
+slice whose confidences are all equal is that slice's own accuracy, not the better half of it. The
+count the gate prints (`n=` in a rule's failure message) is the slice's size, not the accepted size,
+so a very wide group is not visible from the message alone.
+
+Ties are the normal case rather than a corner: a fitted temperature can leave a bucket reporting a
+point mass, which `laya.common.answer_confidence` records of the shipped `choice:11+`, and a real
+checkpoint produced a six-row group at exactly 1.0 out of twelve answers. Cutting at a row index
+instead made both metrics depend on the order the dataset arrived in -- the same rows, shuffled,
+moved `selective_accuracy@50` between 0.000 and 1.000.
+
+`aurc` integrates one risk value per distinct level, weighted by the answers that level spans, so it
+remains an area under the risk--coverage curve rather than an average of unevenly sized points.
+
+Two consequences worth planning for:
+
+* **A number can move in either direction, by more than a reordering could.** Where a group
+  straddles the cut, the threshold reading differs from every row-index reading of the same data:
+  measured over 400,001 tie-shaped datasets, up to 0.500 for `selective_accuracy@50` and 0.351
+  for `aurc`. On the twelve-answer shape above -- six correct, all at confidence 1.0 -- `aurc` moves
+  0.327 (0.173 to 0.500). A gate that was passing may fail, and one that was failing may pass; the
+  previous verdict depended on row order, including for an absolute `min` or `max` limit, which is
+  refused by nothing because it reads a single run.
+* **Regenerate committed baselines.** `config.coverage_metric_definition` records which definition
+  produced a report. Comparing a coverage metric across two definitions is refused on **both** the
+  gates that subtract a baseline -- `--baseline --tolerance` (`EvalReport.compare`) and a relative
+  rule (`max_drop` / `max_increase`) under `--gate-policy` -- and on **either** side being stale,
+  not just the baseline: a candidate produced by an older `laya` carries a row-order artifact that
+  can read *better* than the truth, so gating it against a correctly regenerated baseline would
+  pass a regression that the correctly scored report fails. Without that refusal a
+  stale baseline hides a real regression: a slice recorded at 0.033 under the old definition reads
+  0.517 under this one, so a candidate that genuinely dropped 0.217 would clear a `max_drop` of
+  0.05. `ece` and `brier` do not cut and stay comparable.
+
+With no ties in the data there is one level per answer, and both metrics are exactly what they have
+always been -- bit-identical, not merely close.
+
+
+Add `ScoreWithin(0.25)` to the evaluator list for a tolerance metric; the default evaluator set is
+`choice_accuracy`, `noul_accuracy`, `score_mae` and `mean_confidence`. The confidence metrics are not
+evaluators and are not opted into: `ece`, `brier`, `aurc`, `selective_accuracy@50` and
+`selective_accuracy@80` are all computed on every run that has at least one answer carrying both a
+confidence and a known label, whatever evaluator list it was given. From the CLI the
 same thing is one flag: `laya-evals run data.jsonl --score-within 0.25` reports `score_within_0.25`
 beside the defaults, and the flag repeats, so `--score-within 0.25 --score-within 0.5` reports both.
 
@@ -183,21 +433,26 @@ raising `TypeError` halfway through a long run.
 
 `--min-confidence T` forwards core's opt-in abstention threshold (#361) to every call the run
 makes, so `Router` and `ONNXAgent` mark answers whose `answer_confidence` falls below `T` with
-`low_confidence: True` before the harness sees them. Unlike grouping, this changes the answers
-that score: the same run at `T=0` and `T=0.7` is a different experiment, and a `precision@coverage`
-sweep is a series of these, not a single baseline drifting.
+`low_confidence: True` and `abstention: "abstained"` before the harness sees them. The gate is a
+*reporting* control, not a scoring one: `apply_confidence_gate` leaves
+`answer["choice"] / ["noul"] / ["score"]` as the raw argmax and `_aggregate` reads only those
+keys, so every accuracy, calibration and coverage number -- `ece`, `brier`, `aurc`,
+`selective_accuracy@NN` -- is the same at `T=0` and `T=0.7`. What changes is the report's
+`config.timing.min_confidence` and `config.timing.min_confidence_sent`, and any caller who acts
+on the flag downstream of the harness.
 
 The accepted range is core's `laya.confidence.check_min_confidence` -- `[0.0, 1.0]`, finite, not
 a bool -- rather than a copy here, so a value the gate itself would reject fails as a usage error
-(exit 2) before any checkpoint loads. `0.0` is a legal ask: it is the control arm for a
-`precision@coverage` sweep, and a check that dropped it would hide the sweep's own floor.
+(exit 2) before any checkpoint loads. `0.0` is a legal ask: it is the control arm for an
+abstention sweep and the threshold at which `flag_low_confidence` marks no answer, so a check that
+dropped it would hide which arm actually ran.
 
 A runner whose `predict` or (for a batched run) whose `predict_batch` predates the gate is
-**refused with a named `EvalError`**, not scored without the threshold. Silently dropping a
-scoring control is the class of lie this harness exists to prevent: the report would publish a
-`precision@coverage` figure for a policy that never ran. `config.timing` records both the ask and
-the fact: `min_confidence` is the threshold that was requested, `min_confidence_sent` says whether
-any call this run made actually carried it.
+**refused with a named `EvalError`**, not run without the threshold. Silently dropping it would
+let `report.config["timing"]["min_confidence"]` name a threshold the harness never applied -- the
+class of lie this harness exists to prevent, even though the metric numbers stay identical.
+`config.timing` records both the ask and the fact: `min_confidence` is the threshold that was
+requested, `min_confidence_sent` says whether any call this run made actually carried it.
 
 ## Slices
 
@@ -258,11 +513,12 @@ is reviewable on its own:
 | `schema` | the report shape, `laya-evals-report/1`, so a consumer can refuse one it cannot read |
 | `dataset` | the path as typed -- a name, not a hash |
 | `dataset_sha256` | the sha256 of the dataset bytes that were parsed |
-| `questions_sha256` | a fingerprint of the question schema: every question's id, type, `instructions` and `criteria`, over the whole dataset |
+| `questions_sha256` | a fingerprint of the question schema: every question's id, type, `instructions`, `labels` and `criteria`, plus `option_order` on any row that names it, over the whole dataset |
 | `laya_version` | the `laya` that computed the numbers |
+| `coverage_metric_definition` | which definition of `aurc` / `selective_accuracy@*` produced this report (see [coverage cuts](#coverage-cuts-and-ties)). A relative gate rule on either refuses a baseline recorded under a different one, rather than subtracting numbers that do not mean the same thing |
 | `thresholds` | the gate this run applied: `min`, `max` and `baseline_tolerance` |
 | `gate_policy` | the optional slice gate policy applied by `run --gate-policy` |
-| `revisions` | the commit each checkpoint that answered was loaded from (see [below](#baseline-and-ci-gate)) |
+| `revisions` | the commit each checkpoint that answered was loaded from: a torch run reports one entry per checkpoint it loaded, an `--onnx` run one entry keyed by the `--model` value that names the export's source, and a checkpoint given as a local directory is recorded as `null` (see [below](#baseline-and-ci-gate)) |
 
 `dataset` is a path, and a path is not an identity: a dataset can be edited in place, moved, or
 refetched under the same name, and a CI cache can hand two runs the same filename and different
@@ -289,6 +545,17 @@ a copy edit is treated as a new experiment. That is the honest default -- the al
 similarity heuristic standing between a run and its baseline, and no evaluation system in common
 use has one.
 
+`option_order` is the one field hashed conditionally, and only when a row names it. It is a
+caller-supplied key: `laya/mcp/server.py` advertises it, `Agent._check_question` and
+`laya/mcp/tools.py::_check_option_order` validate it as a permutation of the option indices, and
+`laya/common.py::build_sequence` and `unpermute_probs` read it to place each answer slot, so a row
+that permutes its options asks a different question and two such datasets must not share a
+fingerprint. `research/eval/metamorphic.py::permute_options` measures the same sensitivity from the
+other side -- it exists to shuffle the option list and check that the answers follow. Hashing an
+absent key as `null` would move the digest of every dataset that never uses the field, so an absent
+key stays out of the hash and such a dataset keeps the fingerprint its committed baseline already
+carries.
+
 Nothing time-bearing is recorded, so a report is still byte-reproducible for a fixed runner.
 
 `REPORT_SCHEMA`, `questions_fingerprint(dataset)` and `file_fingerprint(path)` are public, so a
@@ -298,7 +565,9 @@ caller driving `laya.evals.evaluate` directly gets the same identity a CLI run d
 
 - Keep the dataset, a baseline report (`--json` output you have reviewed), and the tolerances
   together, committed, so a change is a reviewable diff. `--tolerance METRIC=VALUE` is the
-  maximum absolute drift allowed for that metric.
+  maximum absolute drift allowed for that metric. It has to be a limit that can fail: `Infinity`
+  is one every finite drift fits inside, so it is refused rather than read as no gate for that
+  metric.
 - `laya-evals run ... --baseline baseline.json --tolerance ...` exits non-zero on drift, so it
   drops into CI unchanged. `laya.evals.EvalReport.compare` and `assert_regression` expose the
   same logic for tests.
@@ -333,15 +602,51 @@ The harness is deterministic for a fixed checkpoint revision, so a report is rep
 `run` records the dataset, model and device, plus the [timing](#batching-and-timing) facts of the
 run, in the report's `config` block, and `revisions`: the commit each checkpoint that answered was
 actually loaded from. `--revision <SHA>` pins that commit for every checkpoint the run loads, and
-`--revision english=<SHA>` pins one checkpoint (repeatable) — which is the form an auto-routing run
+`--revision english=<SHA>` pins one checkpoint — which is the form an auto-routing run
 wants, since the three checkpoints are three repositories and one commit cannot exist in all of
-them. Left unpinned, the run takes the checkpoint's default branch and the report still says which
+them. Repeat a pin to say the same commit twice; two different commits for one checkpoint — however
+it is spelled, so `en=` beside `english=` counts — exit 2 instead of loading whichever came last,
+because `revisions` reports the commit that ANSWERED and a dropped pin would leave no trace. The
+same refusal covers two different bare commits.
+Left unpinned, the run takes the checkpoint's default branch and the report still says which
 commit answered, so a baseline drift can be attributed to the weights or to the code.
 `laya/revisions.py` publishes reviewed commit SHAs in `PINNED_REVISIONS` for callers who want to
 opt in. With `--onnx`, only a bare `--revision <SHA>` applies, to the config and tokenizer download.
+
+Both routes write the `revisions` block. A torch run reports one entry per checkpoint the Router
+loaded; an `--onnx` run answers from one export, so it reports a single entry keyed by the `--model`
+value that names that export's source — which is an assumption when `--model` is left out, since the
+key then reads the default `convaiinnovations/laya` while `model` itself is `null`. Neither route can
+name a commit for a checkpoint given as a local directory: `Agent.revision` and `ONNXAgent.revision`
+both stay `None` when nothing was downloaded (`laya/agent.py:574`, `laya/onnx_agent.py:107`), so that
+entry is recorded as `null` rather than dropped.
 
 ## Adding the real labelled set
 
 Drop a JSONL in `research/evals/` and a reviewed baseline beside it, then point a workflow (or
 `research/evals/check_regression.py`) at both. The format is the same as the fixture; nothing in
 the harness knows about MASSIVE.
+
+## Evidence inspection
+
+`evidence` reads — never writes — the artifacts a fine-tune/eval run already persists and says
+what evidence exists, what is missing, and what is insufficient. It loads no model weights and
+does not require torch.
+
+```bash
+laya-evals evidence --checkpoint ./my-checkpoint [--report report.json]
+```
+
+A checkpoint directory must contain `rl_agent_config.json`. Calibration evidence is derived from
+the persisted `training.laya_train_calibration` block: a legacy checkpoint with no training
+metadata is `UNKNOWN`; an entry whose `items` is not an integer count — a missing key, a string, a
+JSON `true` — is `UNKNOWN` rather than a count of one; a question type with zero items is `MISSING`;
+a type whose entry records any upstream `issues` text (not fitted, below `MIN_TYPE_N`/`CALIB_WARN_N`,
+clamped, unchanged fit) is `INSUFFICIENT`; a clean fit is `PRESENT`. The helper trusts the persisted
+`issues` written by #933 instead of keeping a second numeric threshold source.
+
+The eval report's identity fields (`schema`, `dataset_sha256`, `questions_sha256`, `laya_version`)
+are reported with the same semantics as `run`. The checkpoint↔report relationship is claimed only
+as a deterministic conflict: if both artifacts expose the same `dataset_sha256`/`questions_sha256`
+with different values, it is `INCOMPARABLE`. Everything else is `UNKNOWN` — matching `laya_version`
+alone never proves a match, and differing `laya_version` alone never proves a conflict.

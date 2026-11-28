@@ -17,7 +17,7 @@ import math
 import sys
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import _eval_policy, evals
+from . import _eval_policy, evals, evidence
 from .evals import EvalError
 
 
@@ -96,10 +96,31 @@ def _parse_pairs(pairs: Optional[Sequence[str]]) -> Dict[str, float]:
         if not name or not raw:
             raise EvalError("expected NAME=VALUE, got %r" % pair)
         try:
-            out[name.strip()] = float(raw)
+            number = float(raw)
         except ValueError:
             raise EvalError("%r is not a number in %r" % (raw, pair))
+        # A non-finite limit or tolerance disables the gate it names rather than tightening it:
+        # `--max ece=inf` and `--min accuracy=-inf` pass every measurement, and
+        # `--tolerance METRIC=inf` makes `compare` accept a drift of any size and still exit 0 --
+        # the code that means "the gate ran and the numbers passed". `nan` was refused for this
+        # exact reason; `inf` reaches the same gate by a route `nan` has no equivalent of, because
+        # `float("1e999")` overflows to `inf` and raises nothing.
+        if not math.isfinite(number):
+            raise EvalError("%r is not a number in %r" % (raw, pair))
+        out[name.strip()] = number
     return out
+
+
+def _limit(raw: str) -> float:
+    """argparse `type=` for `--min-accuracy` and `--max-ece`: refuse a non-finite number."""
+    try:
+        number = float(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError("%r is not a number" % raw)
+    # Same gate as `_parse_pairs`: a non-finite limit decides nothing.
+    if not math.isfinite(number):
+        raise argparse.ArgumentTypeError("%r is not a number" % raw)
+    return number
 
 
 def _parse_revisions(pairs: Optional[Sequence[str]]) -> Tuple[Optional[str], Dict[str, str]]:
@@ -108,16 +129,35 @@ def _parse_revisions(pairs: Optional[Sequence[str]]) -> Tuple[Optional[str], Dic
     A bare value is the commit for every checkpoint this run loads; `NAME=SHA` pins one
     checkpoint, which is what an auto-routing run needs, because the three checkpoints are three
     Hub repositories and one commit cannot exist in all of them.
+
+    Repeating a pin is agreement, not a clash, and is accepted either way. Two different commits for
+    one checkpoint -- every checkpoint, or the same one -- are refused rather than resolved to
+    whichever pair came last: a run loads one commit per checkpoint, and the report's `revisions`
+    block records the commit that ANSWERED, so the dropped pin would leave no trace anywhere a
+    reader could see the ambiguity in.
     """
+    # The target is a checkpoint, not a spelling: `Router.resolve` folds case and aliases onto the
+    # key it loads, so `en=` beside `english=` asks for two commits of one checkpoint. Asking the
+    # same function the Router asks keeps the CLI's grouping and the Router's from diverging.
+    from .router import canonical_name
+
     shared: Optional[str] = None
     per_model: Dict[str, str] = {}
+    pinned: Dict[str, Tuple[str, str]] = {}    # checkpoint -> (spelling it arrived as, commit)
     for pair in pairs or []:
         name, sep, value = pair.partition("=")
         if sep:
             name, value = name.strip(), value.strip()
             if not name or not value:
                 raise EvalError("expected NAME=REVISION, got %r" % pair)
+            checkpoint = canonical_name(name)
+            earlier = pinned.get(checkpoint)
+            if earlier is not None and earlier[1] != value:
+                spelled = "" if earlier[0] == name else " (given as %r and %r)" % (earlier[0], name)
+                raise EvalError("--revision names two commits for %r%s: %r, %r"
+                                % (checkpoint, spelled, earlier[1], value))
             per_model[name] = value
+            pinned[checkpoint] = (name, value)
         else:
             value = pair.strip()
             if not value:
@@ -176,12 +216,16 @@ def _build_parser() -> argparse.ArgumentParser:
                           "examples into the same forward pass so each pads to a shorter maximum; "
                           "scores the same answers, in the same order")
     run.add_argument("--min-confidence", dest="min_confidence", type=float, metavar="THRESHOLD",
-                     help="abstention threshold on `answer_confidence` (#361): answers below it "
-                          "come back abstained, so the run scores the policy at that threshold "
-                          "rather than the raw argmax. Accepted range is core's -- "
-                          "`laya.confidence.check_min_confidence` -- not a copy of it here, and a "
-                          "runner that predates the gate is refused with a named error rather "
-                          "than silently scored without it")
+                     help="abstention threshold on `answer_confidence` (#361): every answer below "
+                          "it is returned flagged with `low_confidence: True` and "
+                          "`abstention: \"abstained\"`. The gate writes those state fields and "
+                          "leaves `answer[\"choice\"] / [\"noul\"] / [\"score\"]` as the raw argmax, "
+                          "so the metrics are identical at every threshold -- what changes is the "
+                          "report's config, which names the threshold and asserts it was sent. "
+                          "Accepted range is core's -- `laya.confidence.check_min_confidence` -- "
+                          "not a copy of it here, and a runner that predates the gate is refused "
+                          "with a named error rather than publishing a `min_confidence` it never "
+                          "applied")
     run.add_argument("--on-error", choices=("fail", "skip"), default="fail",
                      help="'fail' (the default) stops the run when a runner call raises; 'skip' "
                           "lists every row it could not score under the report's config.errored "
@@ -189,9 +233,9 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--baseline", help="a baseline report JSON to compare against")
     run.add_argument("--tolerance", action="append", metavar="METRIC=VALUE",
                      help="allowed absolute drift from the baseline; repeatable")
-    run.add_argument("--min-accuracy", type=float,
+    run.add_argument("--min-accuracy", type=_limit,
                      help="minimum accuracy (choice, else noul) for the whole dataset")
-    run.add_argument("--max-ece", type=float, help="maximum expected calibration error")
+    run.add_argument("--max-ece", type=_limit, help="maximum expected calibration error")
     run.add_argument("--score-within", dest="score_within", type=float, action="append",
                      metavar="TOL",
                      help="also report score_within_TOL, the fraction of score answers within TOL "
@@ -205,6 +249,17 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--json", dest="json_out", help="write the full report JSON here")
     run.add_argument("--markdown", dest="markdown_out", help="write a Markdown summary here")
 
+    agreement = sub.add_parser("agreement", help="compare saved teacher and student choice runs")
+    agreement.add_argument("reference", help="reference teacher run JSON")
+    agreement.add_argument("repeat", help="independent repeat teacher run JSON")
+    agreement.add_argument("student", help="student run JSON on the same cases")
+    agreement.add_argument("--bootstrap-samples", type=int, default=2000,
+                           help="case bootstrap replicates, 100–100000 (default '2000')")
+    agreement.add_argument("--seed", type=int, default=0,
+                           help="non-negative bootstrap seed (default '0')")
+    agreement.add_argument("--json", dest="json_out", metavar="PATH",
+                           help="write the agreement report to PATH instead of stdout")
+
     compare = sub.add_parser("compare", help="compare a report JSON against a baseline")
     compare.add_argument("report", help="a report JSON written by `laya-evals run --json`")
     compare.add_argument("--baseline", required=True,
@@ -214,13 +269,35 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="allowed absolute drift; repeatable")
     compare.add_argument("--gate-policy", metavar="FILE",
                          help="apply opt-in per-slice quality rules from a JSON policy")
+    evidence_cmd = sub.add_parser("evidence",
+                                  help="read-only evidence inspection over a checkpoint config and an eval report",
+                                  epilog="example: laya-evals evidence --checkpoint ./my-checkpoint --report report.json")
+    evidence_cmd.add_argument("--checkpoint", required=True,
+                              help="checkpoint directory containing rl_agent_config.json")
+    evidence_cmd.add_argument("--report", default=None,
+                              help="an existing laya-evals report JSON")
 
     return parser
 
 
 def _load_report(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
+    # `main`'s usage-error handler promises that "an unreadable report" exits 2, and four report
+    # reads route through here. Only one shape of unreadable kept that promise: a missing path
+    # raised FileNotFoundError and landed in the handler, while a path that is a directory or on an
+    # unreadable volume, a file that is not valid JSON, and a file that is valid JSON but not an
+    # object each escaped as a traceback and exit 1 -- the code this CLI reserves for "a threshold
+    # or a baseline tolerance failed". A CI job cannot tell those apart, which is the one
+    # distinction the exit codes exist to draw. `laya-evals agreement` has always read its three
+    # runs this way; this makes the shared report loader satisfy the same contract.
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            document = json.load(handle)
+    except (OSError, ValueError, RecursionError) as exc:
+        raise EvalError("cannot read report %r: %s" % (path, exc)) from exc
+    if not isinstance(document, dict):
+        raise EvalError("cannot read report %r: expected a JSON object, found %s"
+                        % (path, type(document).__name__))
+    return document
 
 
 def _check_thresholds(overall: Dict[str, float], mins: Dict[str, float],
@@ -232,12 +309,16 @@ def _check_thresholds(overall: Dict[str, float], mins: Dict[str, float],
         value = overall.get(name)
         if value is None:
             failures.append("metric %r is not in the report" % name)
+        elif math.isnan(value):
+            failures.append("metric %r is NaN" % name)
         elif value < limit:
             failures.append("%s=%.4f is below the minimum %.4f" % (name, value, limit))
     for name, limit in maxs.items():
         value = overall.get(name)
         if value is None:
             failures.append("metric %r is not in the report" % name)
+        elif math.isnan(value):
+            failures.append("metric %r is NaN" % name)
         elif value > limit:
             failures.append("%s=%.4f is above the maximum %.4f" % (name, value, limit))
     return failures
@@ -247,6 +328,12 @@ def _print_deltas(deltas: Dict[str, Dict[str, Any]]) -> None:
     for metric, delta in sorted(deltas.items()):
         if delta.get("missing"):
             print("%-18s baseline=%.4f missing from the report" % (metric, delta["baseline"]))
+            continue
+        if delta.get("incomparable"):
+            # The diff is NaN by construction here, and "diff=+nan" on its own is not a
+            # diagnosis: print the reason the comparison was refused, not just its symptom.
+            print("%-18s baseline=%.4f value=%.4f not compared: %s"
+                  % (metric, delta["baseline"], delta["value"], delta["incomparable"]))
             continue
         print("%-18s baseline=%.4f value=%.4f diff=%+.4f (tol %.4f)"
               % (metric, delta["baseline"], delta["value"], delta["diff"], delta["tolerance"]))
@@ -323,12 +410,19 @@ def _cmd_run(args) -> int:
             if revisions:
                 pins["revisions"] = revisions
             router = laya.Router(device=args.device, preload=False, **pins)
+            # `--model` is not a constructor argument: it is stamped onto every row and resolved by
+            # the first row itself. Resolving it here asks the Router that will answer, so the
+            # checkpoint names this run can serve are the names it accepts.
+            if args.model:
+                router.resolve(args.model)
         except ValueError as exc:
             # `Router` already rejects a checkpoint name it does not know -- normalising case,
-            # surrounding spaces and aliases on the way -- with the option list in the message.
-            # This only turns that into `laya-evals: unknown model 'englishg'; choose one of …`
-            # instead of a traceback, so a mistyped pin fails as a usage error and never starts a
-            # download.
+            # surrounding spaces and aliases on the way -- with the option list in the message, for
+            # a `--revision` pin at construction and for `--model` just above. This only turns that
+            # into `laya-evals: unknown model 'englishg'; choose one of …` instead of a traceback,
+            # so a mistyped checkpoint fails as a usage error and never starts a download. Left to
+            # the row, `--model` raised inside `evaluate`, where its ValueError escaped as exit 1 --
+            # the code that means a threshold or baseline failed.
             raise EvalError(str(exc)) from exc
         runner = RouterRunner(router)
     config = {"dataset": args.dataset, "model": args.model, "device": args.device,
@@ -353,8 +447,16 @@ def _cmd_run(args) -> int:
     # the run: `preload=False` means no checkpoint is resident before the first row.
     # `loaded_revisions` reports the commit each resident agent came from -- the pin when there is
     # one, the commit the default branch resolved to when there is not, None for a local path.
-    if router is not None:
-        report.config = dict(report.config, revisions=getattr(router, "loaded_revisions", {}))
+    # The ONNX arm answers from one checkpoint and `ONNXAgent` resolves the same fact for it
+    # (`self.revision`, `laya/onnx_agent.py`), so the block is written there too: `--revision`
+    # promises "the report records the commit that answered either way", and a `revisions` block
+    # that only ever appears on the torch path does not keep it -- nor does the config table in
+    # `docs/evals.md`, which documents `revisions` for every `run`.
+    if args.onnx:
+        revisions = {agent.model_id: getattr(agent, "revision", None)}
+    else:
+        revisions = getattr(router, "loaded_revisions", {})
+    report.config = dict(report.config, revisions=revisions)
 
     if extra:
         _warn_no_value(extra, report)
@@ -397,16 +499,47 @@ def _cmd_run(args) -> int:
                                    " ".join("%s=%.4f" % (k, v) for k, v in sorted(metrics.items()))))
 
     if args.json_out:
-        with open(args.json_out, "w", encoding="utf-8") as handle:
-            json.dump(report.to_json(), handle, ensure_ascii=False, indent=2, sort_keys=True)
+        # `_cmd_agreement` already turns a report it cannot write into `EvalError`, and for the same
+        # reason: a path that is a directory, or on a read-only volume, raises an `OSError` that is
+        # not a `FileNotFoundError`, so it walks past `main`'s usage-error handler and leaves a
+        # traceback and exit 1 -- the code this CLI reserves for "a threshold or a baseline
+        # tolerance failed" -- on a run that wrote nothing. A missing parent directory already
+        # exited 2 through that handler; the two shapes of one mistake have to agree.
+        try:
+            with open(args.json_out, "w", encoding="utf-8") as handle:
+                json.dump(report.to_json(), handle, ensure_ascii=False, indent=2, sort_keys=True)
+        except OSError as exc:
+            raise EvalError("cannot write report %r: %s" % (args.json_out, exc)) from exc
     if args.markdown_out:
-        with open(args.markdown_out, "w", encoding="utf-8") as handle:
-            handle.write(report.to_markdown())
+        try:
+            with open(args.markdown_out, "w", encoding="utf-8") as handle:
+                handle.write(report.to_markdown())
+        except OSError as exc:
+            raise EvalError("cannot write markdown report %r: %s"
+                            % (args.markdown_out, exc)) from exc
 
     if failures:
         for failure in failures:
             print("FAIL: " + failure, file=sys.stderr)
         return 1
+    return 0
+
+
+def _cmd_evidence(args) -> int:
+    try:
+        result = evidence.inspect_checkpoint(args.checkpoint, args.report)
+    except (OSError, ValueError) as exc:
+        # `FileNotFoundError` alone covered a missing path only. A `--report` that is a directory,
+        # or a checkpoint config the process may not read, raised an OSError subclass that walked
+        # out of `main` and left a traceback with exit 1 -- the code this CLI keeps for a quality
+        # failure -- next to the same mistake on a missing path, which exited 2. Both are caller
+        # mistakes about a named path, and the errno text names it. Nothing here reaches the Hub:
+        # `laya/evidence.py` imports `json` and `os` only, so there is no failed download to
+        # mistake for a usage error, which is why this handler is allowed to be wider than the
+        # `FileNotFoundError` one in `main`.
+        print("laya-evals: %s" % exc, file=sys.stderr)
+        return 2
+    print(evidence.format_summary(result))
     return 0
 
 
@@ -441,13 +574,52 @@ def _cmd_compare(args) -> int:
     return 0 if ok and not failures else 1
 
 
+def _cmd_agreement(args) -> int:
+    def unique_object(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError("duplicate JSON key %r" % key)
+            obj[key] = value
+        return obj
+
+    runs = []
+    for path in (args.reference, args.repeat, args.student):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                runs.append(json.load(handle, object_pairs_hook=unique_object))
+        except (OSError, ValueError, RecursionError) as exc:
+            raise EvalError("cannot read agreement run %r: %s" % (path, exc)) from exc
+    report = evals.compare_agreement(*runs, bootstrap_samples=args.bootstrap_samples, seed=args.seed)
+    encoded = json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
+    if args.json_out:
+        try:
+            with open(args.json_out, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(encoded)
+        except OSError as exc:
+            raise EvalError("cannot write agreement report %r: %s" % (args.json_out, exc)) from exc
+    else:
+        print(encoded, end="")
+    return 0
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
+    # Same reason as `laya.cli.main`: redirected output is encoded with the locale's codec by
+    # default (cp1252 on Windows), which cannot hold a non-Latin question id, tag or language, so
+    # `laya-evals validate data.jsonl > out.txt` died with a traceback and exit 1 -- the code kept
+    # for a quality failure. `laya eval` lands here before `cli.main` reaches its own copy.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     try:
+        if args.command == "agreement":
+            return _cmd_agreement(args)
         if args.command == "validate":
             return _cmd_validate(args)
         if args.command == "run":
             return _cmd_run(args)
+        if args.command == "evidence":
+            return _cmd_evidence(args)
         return _cmd_compare(args)
     except EvalError as exc:
         # A malformed dataset, an unreadable report, or a mistyped pin is a usage error, not a

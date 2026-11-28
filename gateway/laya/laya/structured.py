@@ -50,9 +50,13 @@ class DecisionResult:
     `laya-multilingual` ships with no fitted temperatures at all. See `common.answer_confidence`
     and the README's Calibration section.
 
-    `confidence` keeps the normalized-entropy value it has always had, because that is a
-    different quantity on a scale that depends on the label count. A field that reported no
-    usable `answer_confidence` maps to `None`, which is not the same as a reported `0.0`.
+    `confidence` keeps the value each field's type has always produced: normalized entropy
+    `1 - H(p) / log(k)` for `choice` and `score`, whose scale depends on the label count,
+    and `max(p_true, 1 - p_true)` for `noul` -- a probability of the reported side, not an
+    entropy, and not label-count dependent. `structured._details` reads the answer verbatim,
+    so the formula is per-type; a single sentence cannot describe every field in this dict.
+    A field that reported no usable `answer_confidence` maps to `None`, which is not the same
+    as a reported `0.0`.
     """
 
     values: Dict[str, Any]
@@ -95,11 +99,16 @@ def _schema_of(model: Any) -> Dict[str, Any]:
 
 
 def _enum_field(path: str, name: str, values: Sequence[Any], description: Optional[str]) -> _Field:
+    # A JSON 'enum' is an array. Reject a bare scalar before len(): a str is iterable, so without
+    # this check it silently splits into per-character options instead of erroring (the module
+    # promises malformed schemas raise a SchemaError that names the path).
+    if not isinstance(values, (list, tuple)):
+        raise SchemaError("%s: 'enum' must be an array of values, got %s" % (path, type(values).__name__))
     if len(values) > MAX_OPTIONS:
         raise SchemaError("%s: %d options exceeds MAX_OPTIONS=%d" % (path, len(values), MAX_OPTIONS))
     if not values:
         raise SchemaError("%s: 'enum' must not be empty" % path)
-    if all(isinstance(v, bool) for v in values):
+    if all(isinstance(v, bool) for v in values) and len(set(values)) == 2:
         return _noul_field(path, name, description)
     options = [(("null" if v is None else str(v)), v) for v in values]
     if len({label for label, _ in options}) != len(options):
@@ -142,9 +151,44 @@ def _score_field(path: str, name: str, prop: Dict[str, Any],
     return _Field(name=name, kind="score", question=question, minimum=lo)
 
 
-def _field(path: str, name: str, prop: Dict[str, Any]) -> _Field:
+_LOCAL_REFS = (("#/$defs/", "$defs"), ("#/definitions/", "definitions"))
+
+
+def _inline_ref(path: str, prop: Dict[str, Any], root: Dict[str, Any],
+                seen: Tuple[str, ...]) -> Tuple[Dict[str, Any], Tuple[str, ...]]:
+    """Replace a local `$ref` with the definition it names, the property's own keys on top.
+
+    Pydantic renders every `Enum` field as `{"$ref": "#/$defs/<Name>"}` (draft-07 and pydantic v1
+    spell it `#/definitions/`), with a sibling `description` when the field has one. The
+    definition's own `description` is dropped: pydantic fills it from the enum's docstring (v1 with
+    "An enumeration." when there is none), which describes the type rather than asking about this
+    field, so the wording stays the field's and an `Enum` asks what the same `Literal` would. Only
+    this schema's own definitions are looked up; anything else is rejected rather than fetched, and
+    a ref met twice on one path is a cycle.
+    """
+    ref = prop["$ref"]
+    if ref in seen:
+        raise SchemaError("%s: $ref %r is recursive; flatten the schema" % (path, ref))
+    target = None
+    for prefix, key in _LOCAL_REFS:
+        defs = root.get(key)
+        if isinstance(ref, str) and ref.startswith(prefix) and isinstance(defs, dict):
+            target = defs.get(ref[len(prefix):])
+    if not isinstance(target, dict):
+        raise SchemaError("%s: $ref %r does not resolve to an entry of this schema's '$defs' or "
+                          "'definitions'" % (path, ref))
+    # a `$ref` the definition carries is an alias, followed by the caller's loop
+    merged = {k: v for k, v in target.items() if k != "description"}
+    merged.update((k, v) for k, v in prop.items() if k != "$ref")
+    return merged, seen + (ref,)
+
+
+def _field(path: str, name: str, prop: Dict[str, Any], root: Optional[Dict[str, Any]] = None,
+           seen: Tuple[str, ...] = ()) -> _Field:
     if not isinstance(prop, dict):
         raise SchemaError("%s: property must be an object, got %s" % (path, type(prop).__name__))
+    while "$ref" in prop:
+        prop, seen = _inline_ref(path, prop, root or {}, seen)
     description = prop.get("description")
     # Pydantic v2 renders `Optional[X]` as `{"anyOf": [<X>, {"type": "null"}]}` with no
     # top-level type/enum/const, the same nullable shape the list form `type: ["string", "null"]`
@@ -152,6 +196,13 @@ def _field(path: str, name: str, prop: Dict[str, Any]) -> _Field:
     # so `Optional[Literal[...]]`, `Optional[int]` and friends map instead of raising. A union of
     # two real types is genuinely ambiguous and still rejected.
     if not ({"const", "enum", "type"} & set(prop)):
+        # pydantic v1 wraps a described `$ref` as `{"allOf": [{"$ref": ...}], "description": ...}`;
+        # a one-item `allOf` is that schema, so it is unwrapped too, the outer keys on top.
+        wrapped = prop.get("allOf")
+        if isinstance(wrapped, list) and len(wrapped) == 1 and isinstance(wrapped[0], dict):
+            branch = dict(wrapped[0])
+            branch.update((k, v) for k, v in prop.items() if k != "allOf")
+            return _field(path, name, branch, root, seen)
         union = prop.get("anyOf") or prop.get("oneOf")
         if union is not None:
             branches = [b for b in union if isinstance(b, dict) and b.get("type") != "null"]
@@ -161,7 +212,7 @@ def _field(path: str, name: str, prop: Dict[str, Any]) -> _Field:
                     % (path, len(branches)))
             branch = dict(branches[0])
             branch.setdefault("description", description)
-            return _field(path, name, branch)
+            return _field(path, name, branch, root, seen)
     if "const" in prop:
         return _enum_field(path, name, [prop["const"]], description)
     if "enum" in prop:
@@ -184,8 +235,6 @@ def _field(path: str, name: str, prop: Dict[str, Any]) -> _Field:
         raise SchemaError("%s: arrays are not supported; ask one field per element" % path)
     if jtype == "object":
         raise SchemaError("%s: nested objects are not supported; flatten the schema" % path)
-    if "$ref" in prop:
-        raise SchemaError("%s: $ref/recursion is not supported; flatten the schema" % path)
     raise SchemaError("%s: unsupported schema %r" % (path, prop))
 
 
@@ -200,7 +249,7 @@ def plan_from_json_schema(schema: Dict[str, Any]) -> List[_Field]:
         raise SchemaError("'properties' must be a non-empty object")
     if len(properties) > MAX_PROPERTIES:
         raise SchemaError("%d properties exceeds MAX_PROPERTIES=%d" % (len(properties), MAX_PROPERTIES))
-    return [_field("properties.%s" % name, name, prop) for name, prop in properties.items()]
+    return [_field("properties.%s" % name, name, prop, schema) for name, prop in properties.items()]
 
 
 def questions_from_json_schema(schema: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -320,6 +369,11 @@ def decide(runner, state: Any, schema: Any = None, *, questions: Optional[Dict[s
     return values
 
 
+# The keys `Router.predict_batch` reads off each request (`route_batch` and the token-budget
+# overrides) rather than accepting as keywords; laya-serve's BATCH_BODY_ITEM_CONTROLS plus `model`.
+_ROUTER_REQUEST_KEYS = ("model", "task", "lang", "lang_guess", "max_len", "head_max_len")
+
+
 def decide_batch(runner, states: Sequence[Any], schema: Any = None, *,
                  questions: Optional[Dict[str, Any]] = None,
                  return_details: bool = False, min_confidence: Optional[float] = None,
@@ -330,9 +384,14 @@ def decide_batch(runner, states: Sequence[Any], schema: Any = None, *,
     are evaluated over every state through ``runner.predict_batch`` (the same
     shared-forward-pass path as :meth:`Agent.predict_batch` /
     :meth:`Router.predict_batch`), then each state's answers are projected exactly as
-    ``decide`` does. Pass exactly one of ``schema`` or ``questions``; extra keyword
-    arguments (``batch_size=``, ``model=``, ``hooks=``, ...) are forwarded to
-    ``runner.predict_batch``. With ``return_details=True`` each item is a
+    ``decide`` does. Pass exactly one of ``schema`` or ``questions``. The extra keywords you leave
+    here (``batch_size=``, ``hooks=``, ``sort_by_length=``, ...) go to ``runner.predict_batch``,
+    but the routing pins and the token budget (``model=``, ``task=``, ``lang=``, ``lang_guess=``,
+    ``max_len=``, ``head_max_len=``) are read off every *request* by a ``Router``, whose
+    ``predict_batch`` declares none of them: ``decide_batch`` copies them onto each request
+    instead, so ``model=`` pins a registered checkpoint there and raises ``TypeError`` on an
+    ``Agent``-like runner, whose ``predict_batch`` declares ``lang=`` but no ``model=``.
+    With ``return_details=True`` each item is a
     ``DecisionResult``. ``min_confidence`` works as in ``decide``: a field whose answer falls
     below it comes back as ``None``, with the answer kept in the details.
 
@@ -365,8 +424,12 @@ def decide_batch(runner, states: Sequence[Any], schema: Any = None, *,
 
     if hasattr(runner, "route_batch"):
         # Router convention: one request dict per state, each carrying the shared
-        # questions, so it routes, groups by checkpoint and restores input order.
-        results = predict_batch([{"state": s, "questions": questions} for s in states],
+        # questions, so it routes, groups by checkpoint and restores input order. The routing
+        # pins and the token budget are read off each request there, not taken as keywords of
+        # predict_batch, so they ride on every request; the rest (batch_size, hooks, ...) is
+        # call-level.
+        per_request = {key: predict_kwargs.pop(key) for key in _ROUTER_REQUEST_KEYS if key in predict_kwargs}
+        results = predict_batch([dict({"state": s, "questions": questions}, **per_request) for s in states],
                                 **predict_kwargs)
     else:
         # Agent convention: a list of states evaluated against one question set.

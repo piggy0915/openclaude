@@ -20,7 +20,7 @@ read the [Router](#routerpredict) one; it is the superset.
 ```
 predict_batch(states, questions, batch_size=..., hooks=..., ...)
   │
-  ├─ active  = installed hooks + per-call hooks         (installed first)
+  ├─ active  = default hooks + installed hooks + per-call hooks   (defaults first)
   ├─ ctx     = PredictContext(states, questions, model=self.model_id, agent=self)
   │
   ├─ try:
@@ -48,7 +48,9 @@ predict_batch(states, questions, batch_size=..., hooks=..., ...)
   │                                                     │
   │   finally:                                          │
   │     ctx.elapsed_ms = now - ctx.started_at           │
-  │     if ctx.results: ctx.usage = aggregate_usage(...)│
+  │     if ctx.results is not None:                     │
+  │         ctx.usage = aggregate_usage(...)            │
+  │         apply_confidence_gate(..., min_confidence)  │
   │     on_predict_end ─────────────────────────────────┘
   │
   └─ return ctx.results
@@ -56,6 +58,14 @@ predict_batch(states, questions, batch_size=..., hooks=..., ...)
 
 The same `ctx` object flows through start, error and end, so `run_id` correlates them and an end
 hook can read `ctx.error`.
+
+The `finally` guard is `ctx.results is not None`, not truthiness, and the empty batch is the only
+case where they differ: `predict_batch([])` sets `ctx.results = []` (`laya/agent.py::Agent.predict_batch`),
+so the guard passes, `ctx.usage` becomes `{"input_tokens": 0, "output_tokens": 0}`, and the confidence
+gate still runs over the (empty) result list. A call that raised before any result leaves
+`ctx.results` and `ctx.usage` both `None`. So for an end hook `usage is None` means "this call
+produced nothing", and it is not the same signal as "this call was empty" -- an audit hook that
+treats the second as the first reports every empty batch as a failure.
 
 ## Agent.system_one / predict
 
@@ -71,7 +81,7 @@ So `system_one` inherits every hook and the same lifecycle, with `ctx.states == 
 ```
 Router.predict(state, questions, model=..., hooks=..., on_predict_start=..., on_predict_end=...)
   │
-  ├─ active = installed hooks + per-call hooks
+  ├─ active = default hooks + installed hooks + per-call hooks
   │
   ├─ route(state, questions, ..., hooks=per-call, hooks_raise=...)
   │    │
@@ -106,6 +116,10 @@ Key points:
 
 - `on_route` runs before the model is loaded, so a hook can pin a checkpoint and avoid loading
   another one.
+- `ctx.started_at` is reset after `route` and `load`, immediately before `on_predict_start`, so
+  the `ctx.elapsed_ms` an end hook reads is the prediction alone. Routing and a cold model load --
+  seconds, for a checkpoint that was not resident -- are outside it. Time the whole call from the
+  caller, or from `on_route`, if that is what you need.
 - Router-level predict hooks wrap the whole call. They are **not** forwarded into the Agent;
   an attached Agent with its own hooks runs those too, which is expected.
 - A Router-level `ctx.skip()` still adds `routing`, so the return shape is stable.
@@ -116,9 +130,10 @@ Each result is what `predict` returns for that request, so Router-level predict 
 request here too: every request gets its own `PredictContext`, `run_id` and `elapsed_ms`.
 
 ```
-Router.predict_batch(requests, batch_size=...)
+Router.predict_batch(requests, batch_size=..., hooks=...)
   │
-  ├─ route_batch(requests) ──► on_route, once per request   (no checkpoint loaded yet)
+  ├─ active = default hooks + installed hooks + per-call hooks   (defaults first; None and [] add nothing)
+  ├─ route_batch(requests, hooks=per-call) ──► on_route, once per request   (no checkpoint loaded yet)
   │
   └─ for each checkpoint, in order of first appearance:
        │
@@ -142,7 +157,7 @@ Key points:
 - Every start hook of a checkpoint's requests runs before any of their end hooks, because they
   share forward passes. A cache that fills in `on_predict_end` therefore cannot serve a duplicate
   state within the same checkpoint group; it can across calls.
-- For the same reason the requests end in reverse of the order they started, so a hook that sets
+- For the same reason the requests end in the reverse of the order they started, so a hook that sets
   something in start and resets it in end (a `contextvars` value, an OpenTelemetry
   `context.attach` / `detach`) unwinds to the value it found.
 - A start hook that replaces `ctx.states`, `ctx.questions` or the token budget changes its own
@@ -211,27 +226,31 @@ See [`examples/hooks/cache.py`](../../examples/hooks/cache.py) for a working cac
 
 Hooks still fire so audit sees every call:
 
-| input | `ctx.results` at end |
-|---|---|
-| `predict_batch([])` | `[]` |
-| `predict_batch(states, {})` (no questions) | one empty-answer payload per state |
-| `system_one(state, {})` | a single empty-answer payload |
+| input | `ctx.results` at end | `ctx.usage` at end |
+|---|---|---|
+| `predict_batch([])` | `[]` | `{"input_tokens": 0, "output_tokens": 0}` |
+| `predict_batch(states, {})` (no questions) | one empty-answer payload per state | zeros, summed over those payloads |
+| `system_one(state, {})` | a single empty-answer payload | `{"input_tokens": 0, "output_tokens": 0}` |
 
 No tokenization or forward pass happens in these cases, but `on_predict_start` and
-`on_predict_end` run.
+`on_predict_end` run. The third `usage` column is the point of the table: every one of these calls
+leaves an end hook with a *real* usage dict, because the guard that fills it is
+`ctx.results is not None` and `[]` passes it. Only a call that raised before producing results
+leaves `ctx.usage` as `None`.
 
 ## Ordering rules
 
-1. Installed hooks run before per-call hooks, always.
+1. Process-wide default hooks run before installed hooks, and installed hooks run before
+   per-call hooks, always.
 2. Within a list, hooks run in list order.
 3. For one event, every hook that implements it runs, in that order, before the next event.
 4. `on_error` runs before `on_predict_end` on the failure path.
 5. `on_evict` runs before `on_load` when a single `load` both evicts and builds.
 
 ```
-installed: [A, B]   per-call: [C]
-on_predict_start: A, B, C
-on_predict_end:   A, B, C
+defaults: [D]      installed: [A, B]      per-call: [C]
+on_predict_start: D, A, B, C
+on_predict_end:   D, A, B, C
 ```
 
 ## Concurrency

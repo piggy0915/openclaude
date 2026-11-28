@@ -1,19 +1,29 @@
 # Build and runtime share one base so the copied virtualenv matches its interpreter.
-ARG PYTHON_IMAGE=python:3.14-slim
+ARG PYTHON_IMAGE=python:3.11-slim-trixie
 
 FROM ${PYTHON_IMAGE} AS build
 
+# PyPI mirror for the wheels pip resolves below. The default is the Tsinghua mirror
+# because this stack builds from mainland China, where files.pythonhosted.org stalls
+# (a cold `pip install .[serve]` took 24 min against PyPI vs ~2 min via the mirror).
+# Override with `--build-arg PIP_INDEX_URL=https://pypi.org/simple` for a non-CN build.
+# The torch install below passes its own --index-url, which takes precedence over this,
+# so torch still comes from download.pytorch.org.
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
 ENV PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_DEFAULT_TIMEOUT=60
 
 # The virtualenv is copied into the runtime image. Upgrade its bundled installers
 # so an up-to-date base does not still ship ensurepip's older pip/setuptools (#739).
 RUN python -m venv --upgrade-deps /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# CPU by default on AMD64 and ARM64. The CUDA override selects cu128 and the
-# DGX Spark override selects cu130. Bump TORCH_VERSION deliberately; the check
-# below fails the build if the wheel does not match the requested index.
+# CPU by default on AMD64 and ARM64. Both the CUDA override and the DGX Spark
+# override select cu130. Bump TORCH_VERSION deliberately; the check below fails
+# the build if the wheel does not match the requested index.
 ARG TORCH_INDEX=cpu
 ARG TORCH_VERSION=2.14.0
 COPY docker/check_torch.py /opt/check_torch.py

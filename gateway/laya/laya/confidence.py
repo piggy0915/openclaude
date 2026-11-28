@@ -35,6 +35,54 @@ def answer_confidence_value(answer: Dict[str, Any]) -> Optional[float]:
     return None
 
 
+def jev_confidence(answer: Dict[str, Any]) -> Optional[float]:
+    """The `confidence` Jev would report for this answer's `probabilities`, or None (#302).
+
+    Laya's `confidence` is normalized entropy, and Jev's is a different formula, so a threshold
+    carried over from Jev selects about twice as much on Laya. These are TypeSafe's own formulas
+    (`system-one-adapter-python`, `_utils/confidence_metrics.py`):
+
+        choice  (max(p) - 1/n) / (1 - 1/n)
+        score   max(0, 1 - sum(p_i * |i - mode|) / D), D the same sum for a uniform distribution
+
+    Both are 1.0 for a single option, and a zero total is read as uniform, as the adapter does.
+    A noul answer has no Jev `confidence`, and a malformed document -- a probability that does not
+    read as a number, a boolean, a non-finite or a negative value -- gives None rather than a
+    guess, so a caller filtering on this number never filters on a made-up one. Negatives are the
+    case that needs naming: the division below normalises by the sum, so a mixed-sign document can
+    divide by a near-zero or negative total and return a number outside [0, 1] for a distribution
+    whose argmax is not the one it measured, while an all-negative document divides back into
+    range and returns exactly what its positive counterpart returns. Refusing them is what makes
+    the range a property: every number this returns lies in [0, 1].
+    """
+    kind = answer.get("type")
+    probabilities = answer.get("probabilities")
+    if kind not in ("choice", "score") or not isinstance(probabilities, dict) or not probabilities:
+        return None
+    try:
+        if kind == "score":
+            p = [float(probabilities[key]) for key in sorted(probabilities, key=int)]
+        else:
+            p = [float(value) for value in probabilities.values()]
+    except (TypeError, ValueError):
+        return None
+    if (any(isinstance(v, bool) for v in probabilities.values())
+            or not all(math.isfinite(v) and v >= 0.0 for v in p)):
+        return None
+    n = len(p)
+    if n == 1:
+        return 1.0
+    total = sum(p)
+    p = [v / total for v in p] if total else [1.0 / n] * n
+    if kind == "choice":
+        return (max(p) - 1.0 / n) / (1.0 - 1.0 / n)
+    mode = max(range(n), key=p.__getitem__)
+    spread = sum(v * abs(i - mode) for i, v in enumerate(p))
+    center = (n - 1) / 2
+    uniform_spread = sum(abs(i - center) for i in range(n)) / n
+    return max(0.0, 1.0 - spread / uniform_spread)
+
+
 def _gate_confidence(answer: Dict[str, Any]) -> Optional[float]:
     """The number the abstention gate compares against `min_confidence`, or None if there is none.
 
@@ -57,26 +105,124 @@ def _gate_confidence(answer: Dict[str, Any]) -> Optional[float]:
     return None
 
 
-def check_min_confidence(v: Any) -> float:
-    """Validate opt-in abstention threshold `min_confidence` (#361).
-
-    Must be a real number in [0.0, 1.0]. Booleans are rejected (even though `isinstance(True, int)`).
-    """
+def _check_one_threshold(v: Any) -> float:
     if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0.0 or v > 1.0:
         raise ValueError("min_confidence must be a float in [0.0, 1.0], got %r" % (v,))
     return float(v)
 
 
+# The vocabulary a per-bucket map may be keyed by, reproduced here rather than imported from
+# `laya.common` because this module must import without PyTorch. `tests/test_conformal_abstention.py`
+# holds the copy against `common.temp_bucket` in both directions, so a band added on one side fails
+# there instead of silently rejecting (or accepting) the wrong keys here.
+BUCKET_QTYPES = ("choice", "score", "noul")
+BUCKET_SIZES = ("2", "3-5", "6-10", "11+")
+#: The one non-bucket key a map may carry: the threshold for every bucket the map does not name.
+DEFAULT_BUCKET_KEY = "default"
+
+
+def bucket_keys() -> set:
+    """Every option-count bucket a `min_confidence` map can name -- the answer shapes
+    :func:`_option_bucket` can produce, and the same strings `common.temp_bucket` spells."""
+    return {"%s:%s" % (qt, size) for qt in BUCKET_QTYPES for size in BUCKET_SIZES}
+
+
+def check_min_confidence_map(m: Dict[Any, Any]) -> Dict[str, float]:
+    """Validate a per-bucket abstention-threshold map (#394).
+
+    Keys are the option-count buckets in `common.temp_bucket`'s spelling -- every
+    :func:`bucket_keys` member (``"choice:2"``, ``"choice:3-5"``, ``"score:6-10"``, ``"noul:2"``
+    and so on) -- plus the optional ``"default"`` used for any bucket the map does not name.
+    Anything else raises: a key no answer can produce is not an unused entry, it is a bucket the
+    caller believes is gated and is not, because :func:`resolve_min_confidence` falls past it to
+    ``"default"`` and then to 0.0 -- gate nothing. Values are floats in [0.0, 1.0]. One confidence
+    threshold does not transfer across option counts (#394); this lets a caller gate each bucket
+    at the level its calibration actually earns. Fit one with
+    :func:`laya.calibrate.fit_abstention_thresholds`, whose keys are this vocabulary by
+    construction.
+    """
+    if not isinstance(m, dict) or not m:
+        raise ValueError("a min_confidence map must be a non-empty dict of bucket -> float, got %r" % (m,))
+    allowed = bucket_keys() | {DEFAULT_BUCKET_KEY}
+    out: Dict[str, float] = {}
+    for key, val in m.items():
+        if not isinstance(key, str) or key not in allowed:
+            raise ValueError("min_confidence map keys must be a bucket like 'choice:3-5' or "
+                             "'default', got %r" % (key,))
+        out[key] = _check_one_threshold(val)
+    return out
+
+
+def check_min_confidence(v: Any):
+    """Validate opt-in abstention threshold `min_confidence` (#361, #394).
+
+    Either a real number in [0.0, 1.0] (one threshold for every answer; booleans rejected even
+    though `isinstance(True, int)`), or a per-bucket mapping (see :func:`check_min_confidence_map`)
+    so the threshold can differ by option count. Returns the value in its validated form -- a
+    `float` for the scalar case, a `dict[str, float]` for the mapping case -- which the gate
+    functions below both accept.
+    """
+    if isinstance(v, dict):
+        return check_min_confidence_map(v)
+    return _check_one_threshold(v)
+
+
+# Bucket spelling mirrors `common.temp_bucket` but is reproduced here so this module stays
+# torch-free (it must import without PyTorch). The answer already carries its type name and, via
+# `probabilities`, its option count, so no checkpoint config is needed. `BUCKET_QTYPES` is the one
+# list of types it reads, and `tests/test_conformal_abstention.py` compares what this returns to
+# `common.temp_bucket` for every option count, so the two bands cannot drift apart unnoticed.
+def _option_bucket(answer: Dict[str, Any]) -> Optional[str]:
+    qt = answer.get("type")
+    if qt not in BUCKET_QTYPES:
+        return None
+    probs = answer.get("probabilities")
+    if isinstance(probs, dict) and probs:
+        k = len(probs)
+    elif qt == "noul":
+        k = 2
+    else:
+        return None
+    size = "2" if k <= 2 else "3-5" if k <= 5 else "6-10" if k <= 10 else "11+"
+    return "%s:%s" % (qt, size)
+
+
+def resolve_min_confidence(answer: Dict[str, Any], thresholds: Dict[str, float],
+                           default: float = 0.0) -> float:
+    """The threshold this answer's option-count bucket is gated at, under a per-bucket map.
+
+    Falls back to the map's ``"default"`` entry, then to `default` (0.0 -- gate nothing), for a
+    bucket the map does not name, so an unconfigured bucket never abstains by surprise. A map that
+    went through :func:`check_min_confidence_map` can only miss here by omitting a bucket: a key
+    mis-spelled well enough that no answer produces it is refused at validation, because it would
+    otherwise reach this fall-through and leave that bucket gated at nothing while its caller
+    believes it is gated.
+    """
+    key = _option_bucket(answer)
+    if key is not None and key in thresholds:
+        return thresholds[key]
+    return thresholds.get("default", default)
+
+
 def flag_low_confidence(results: List[Dict[str, Any]], min_confidence: float) -> None:
     """Opt-in abstention marker (#361): flag answers whose confidence falls below `min_confidence`.
 
-    Reads `answer_confidence` (`max(p)`, the quantity the calibration figures describe and the one
-    that does not drift with the number of options), falling back to `confidence` if
-    `answer_confidence` is absent.
-    The raw answer and confidence stay intact; `low_confidence: True` is added.
+    Reads `answer_confidence` (`max(p)`, the quantity the calibration figures describe -- the
+    *level* it reaches still moves with the option count, which is why `min_confidence` takes a
+    per-bucket map), falling back to `confidence` if `answer_confidence` is absent.
+    The raw answer and confidence stay intact; `low_confidence: True` is added when the answer
+    falls below the threshold, and removed if a previously-flagged answer now clears it (e.g.
+    when a result dict is reused or re-evaluated with a different threshold).
+
+    `min_confidence` is either a float (one threshold for every answer) or a per-bucket mapping
+    (#394), in which case each answer is gated at the threshold of its own option-count bucket via
+    :func:`resolve_min_confidence`.
+
+    Exactly ``0.0`` runs this same loop rather than short-circuiting out of it. Nothing falls below
+    it, so it marks no answer -- and the pass is what clears a marker an earlier, stricter threshold
+    left on a reused payload, which is the state #910 was filed about.
     """
-    if min_confidence == 0.0:
-        return
+    is_map = isinstance(min_confidence, dict)
     for res in results:
         answers = res.get("answers") if isinstance(res, dict) else None
         if not isinstance(answers, dict):
@@ -85,8 +231,14 @@ def flag_low_confidence(results: List[Dict[str, Any]], min_confidence: float) ->
             if not isinstance(a, dict):
                 continue
             conf = _gate_confidence(a)
-            if conf is not None and conf < min_confidence:
+            if conf is None:
+                a.pop("low_confidence", None)
+                continue
+            thr = resolve_min_confidence(a, min_confidence) if is_map else min_confidence
+            if conf < thr:
                 a["low_confidence"] = True
+            else:
+                a.pop("low_confidence", None)
 
 
 #: The states :func:`apply_confidence_gate` reports, and the only ones. There is deliberately no
@@ -129,13 +281,14 @@ def apply_confidence_gate(results: List[Dict[str, Any]], min_confidence: Optiona
     The flag itself stays :func:`flag_low_confidence`'s -- this delegates rather than
     re-implementing the rule, so the boolean and the reported state cannot drift apart.
 
-    A `min_confidence` of exactly ``0.0`` *was* set, so states are reported, and
-    :func:`flag_low_confidence` treats ``0.0`` as a no-op because nothing can fall below it. Every
-    answer carrying a usable confidence therefore reads ``passed``, and the threshold echo is what
-    distinguishes that from a real pass at a real threshold.
+    A `min_confidence` of exactly ``0.0`` *was* set, so states are reported. Nothing can fall below
+    it, so :func:`flag_low_confidence` marks no answer at it and clears whatever a stricter threshold
+    left on a reused payload. Every answer carrying a usable confidence therefore reads ``passed``,
+    and the threshold echo is what distinguishes that from a real pass at a real threshold.
     """
     if min_confidence is None:
         return
+    is_map = isinstance(min_confidence, dict)
     flag_low_confidence(results, min_confidence)
     for res in results:
         answers = res.get("answers") if isinstance(res, dict) else None
@@ -150,4 +303,6 @@ def apply_confidence_gate(results: List[Dict[str, Any]], min_confidence: Optiona
                 a["abstention"] = GATE_UNEVALUATED
             else:
                 a["abstention"] = GATE_PASSED
-            a["abstention_threshold"] = float(min_confidence)
+            # With a per-bucket map, echo the threshold this answer's bucket was actually gated at.
+            a["abstention_threshold"] = float(
+                resolve_min_confidence(a, min_confidence) if is_map else min_confidence)
